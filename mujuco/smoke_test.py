@@ -46,7 +46,6 @@ def apply_windows_patch() -> None:
             print(f"patched for Windows: {path.parent.name}/{path.name}")
 
 def describe(obs) -> str:
-    """One-line description of an observation (dict / numpy array / torch tensor)."""
     if isinstance(obs, dict):
         return "{" + ", ".join(f"{k}: {describe(v)}" for k, v in obs.items()) + "}"
     if hasattr(obs, "device"):  # torch tensor
@@ -158,7 +157,6 @@ def main() -> int:
     for env_id, ok in results.items():
         print(f"{'PASS' if ok else 'FAIL'}  {env_id}")
     return 0 if all(results.values()) else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

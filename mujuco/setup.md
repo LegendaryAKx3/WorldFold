@@ -9,8 +9,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
 ```
 
-Python 3.12+ is required (the Windows patch below uses `delete_on_close`,
-added in 3.12).
+Python 3.12+ is required (the automatic Windows patch in `smoke_test.py` uses
+`delete_on_close`, added in 3.12).
 
 ## 2. Install
 
@@ -46,3 +46,9 @@ python smoke_test.py          # all 10 envs (5 CPU + 5 Warp)
 python smoke_test.py --cpu    # CPU/MuJoCo envs only
 python smoke_test.py --warp   # Warp GPU envs only
 ```
+
+On Windows, the smoke test first patches two bugs in the installed
+so101-nexus 0.4.6 package (see `apply_windows_patch` in the script). Run it at
+least once before using the envs from your own code like `sim.py`, otherwise
+env creation crashes with `ParseXML: empty file`. Re-run it after any
+`pip install`/`--upgrade` of so101-nexus, since reinstalling overwrites the patched files.
