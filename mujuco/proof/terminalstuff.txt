@@ -1,0 +1,212 @@
+(.venv) PS C:\Users\zecha\WorldFold> & c:\Users\zecha\WorldFold\.venv\Scripts\python.exe c:/Users/zecha/WorldFold/mujuco/smoke_test.py
+
+=== MuJoCoTouch-v1 (CPU / MuJoCo) ===
+action space:      Box([-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ], [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291], (6,), float32)
+observation space: Box(-inf, inf, (18,), float32)
+reset -> obs shape=(18,) dtype=float32 device=cpu
+reset -> info keys: ['success', 'tcp_to_obj_dist']
+stepped 20x with random actions, total reward: 6.0454
+last step -> reward=0.3748 terminated=False truncated=False
+saved render frame (480, 640, 3) -> c:\Users\zecha\WorldFold\mujuco\proof\MuJoCoTouch-v1.png
+PASS MuJoCoTouch-v1
+
+=== MuJoCoLookAt-v1 (CPU / MuJoCo) ===
+action space:      Box([-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ], [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291], (6,), float32)
+observation space: Box(-inf, inf, (6,), float32)
+reset -> obs shape=(6,) dtype=float32 device=cpu
+reset -> info keys: ['orientation_error', 'success']
+stepped 20x with random actions, total reward: 6.2063
+last step -> reward=0.3166 terminated=False truncated=False
+saved render frame (480, 640, 3) -> c:\Users\zecha\WorldFold\mujuco\proof\MuJoCoLookAt-v1.png
+PASS MuJoCoLookAt-v1
+
+=== MuJoCoMove-v1 (CPU / MuJoCo) ===
+action space:      Box([-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ], [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291], (6,), float32)
+observation space: Box(-inf, inf, (6,), float32)
+reset -> obs shape=(6,) dtype=float32 device=cpu
+reset -> info keys: ['move_displacement', 'success', 'tcp_to_target_dist']
+stepped 20x with random actions, total reward: 9.8446
+last step -> reward=0.3418 terminated=False truncated=False
+saved render frame (480, 640, 3) -> c:\Users\zecha\WorldFold\mujuco\proof\MuJoCoMove-v1.png
+PASS MuJoCoMove-v1
+
+=== MuJoCoPickLift-v1 (CPU / MuJoCo) ===
+action space:      Box([-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ], [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291], (6,), float32)
+observation space: Box(-inf, inf, (18,), float32)
+reset -> obs shape=(18,) dtype=float32 device=cpu
+reset -> info keys: ['is_grasped', 'is_robot_static', 'lift_height', 'success', 'tcp_to_obj_dist']
+stepped 20x with random actions, total reward: 0.9982
+last step -> reward=0.0454 terminated=False truncated=False
+saved render frame (480, 640, 3) -> c:\Users\zecha\WorldFold\mujuco\proof\MuJoCoPickLift-v1.png
+PASS MuJoCoPickLift-v1
+
+=== MuJoCoPickAndPlace-v1 (CPU / MuJoCo) ===
+action space:      Box([-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ], [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291], (6,), float32)
+observation space: Box(-inf, inf, (24,), float32)
+reset -> obs shape=(24,) dtype=float32 device=cpu
+reset -> info keys: ['is_grasped', 'is_obj_placed', 'is_robot_static', 'lift_height', 'obj_to_target_dist', 'success', 'tcp_to_obj_dist']
+stepped 20x with random actions, total reward: 1.1369
+last step -> reward=0.0401 terminated=False truncated=False
+saved render frame (480, 640, 3) -> c:\Users\zecha\WorldFold\mujuco\proof\MuJoCoPickAndPlace-v1.png
+PASS MuJoCoPickAndPlace-v1
+
+=== WarpTouch-v1 (GPU / Warp, num_envs=8) ===
+Warp 1.15.0 initialized:
+   CUDA Toolkit 12.9, Driver 13.3
+   Devices:
+     "cpu"      : "Intel64 Family 6 Model 198 Stepping 2, GenuineIntel"
+     "cuda:0"   : "NVIDIA GeForce RTX 5070 Laptop GPU" (8 GiB, sm_120, mempool enabled)
+   Kernel cache:
+     \\?\C:\Users\zecha\AppData\Local\NVIDIA\warp\Cache\1.15.0
+Module mujoco_warp._src.smooth a1650da load on device 'cuda:0' took 6.74 ms  (cached)
+Module mujoco_warp._src.collision_driver adba295 load on device 'cuda:0' took 1.19 ms  (cached)
+Module _nxn_broadphase__locals__kernel_6f91ab05 6f91ab0 load on device 'cuda:0' took 1.34 ms  (cached)
+Module ccd_kernel_builder__locals__ccd_kernel_c8e92152 c8e9215 load on device 'cuda:0' took 3.40 ms  (cached)
+Module ccd_kernel_builder__locals__ccd_kernel_fdce69f0 fdce69f load on device 'cuda:0' took 3.86 ms  (cached)
+Module _primitive_narrowphase__locals__primitive_narrowphase_1e54fbd9 1e54fbd load on device 'cuda:0' took 2.27 ms  (cached)
+Module mujoco_warp._src.constraint 74774a2 load on device 'cuda:0' took 2.46 ms  (cached)
+Module _efc_contact_init__locals__kernel_ee7db883 ee7db88 load on device 'cuda:0' took 1.17 ms  (cached)
+Module _efc_contact_jac_dense__locals__kernel_ae632932 a5933cd load on device 'cuda:0' took 1.33 ms  (cached)
+Module _efc_contact_update__locals__kernel_e54acee6 e54acee load on device 'cuda:0' took 0.88 ms  (cached)
+Module mujoco_warp._src.forward 9171246 load on device 'cuda:0' took 1.81 ms  (cached)
+Module mujoco_warp._src.passive 0eb070f load on device 'cuda:0' took 1.42 ms  (cached)
+Module mujoco_warp._src.forward 5b73b26 load on device 'cuda:0' took 2.95 ms  (cached)
+Module mujoco_warp._src.support eb306ca load on device 'cuda:0' took 1.30 ms  (cached)
+Module _tile_cholesky_factorize_solve__locals__cholesky_factorize_solve_5570ed24 d61cd44 load on device 'cuda:0' took 175.78 ms  (cached)
+Module mujoco_warp._src.solver 5d7ad64 load on device 'cuda:0' took 5.22 ms  (cached)
+Module solve_init_jaref__locals__kernel_cceee808 cceee80 load on device 'cuda:0' took 1.15 ms  (cached)
+Module mul_m_dense__locals___mul_m_dense_2ea62a56 2ea62a5 load on device 'cuda:0' took 1.57 ms  (cached)
+Module update_constraint_efc__locals__kernel_841b0e9f 841b0e9 load on device 'cuda:0' took 1.30 ms  (cached)
+Module update_constraint_gauss_cost__locals__kernel_93e40f0e 93e40f0 load on device 'cuda:0' took 1.36 ms  (cached)
+Module update_gradient_JTDAJ_dense_tiled__locals__kernel_50a372ff e97874f load on device 'cuda:0' took 2.14 ms  (cached)
+Module update_gradient_cholesky__locals__kernel_af1983a6 f2819a0 load on device 'cuda:0' took 195.06 ms  (cached)
+Module linesearch_iterative__locals__kernel_35c103d5 303a195 load on device 'cuda:0' took 2.12 ms  (cached)
+Module mujoco_warp._src.sensor 8e924b4 load on device 'cuda:0' took 3.81 ms  (cached)
+Module mujoco_warp._src.derivative 8d080c4 load on device 'cuda:0' took 1.33 ms  (cached)
+Module _factor_solve_lu_sparse_fused__locals__kernel_11089ba3 11089ba load on device 'cuda:0' took 1.57 ms  (cached)
+action space:      Box([[-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]], [[1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]], (8, 6), float32)
+observation space: Box(-inf, inf, (8, 18), float32)
+reset -> obs shape=(8, 18) dtype=torch.float32 device=cuda:0
+stepped 20x with random actions, mean reward/step: 0.2314
+last step -> rewards shape=(8,) dtype=torch.float32 device=cuda:0, terminated 0/8, truncated 0/8
+PASS WarpTouch-v1
+
+=== WarpLookAt-v1 (GPU / Warp, num_envs=8) ===
+Module solve_init_jaref__locals__kernel_d37dd782 d37dd78 load on device 'cuda:0' took 1.06 ms  (cached)
+Module mul_m_dense__locals___mul_m_dense_2898fc62 2898fc6 load on device 'cuda:0' took 1.11 ms  (cached)
+Module update_constraint_gauss_cost__locals__kernel_6581c289 6581c28 load on device 'cuda:0' took 0.81 ms  (cached)
+Module update_gradient_JTDAJ_dense_tiled__locals__kernel_c7f6a4f2 8fbfcad load on device 'cuda:0' took 1.50 ms  (cached)
+Module update_gradient_cholesky__locals__kernel_0dc9e786 7129611 load on device 'cuda:0' took 165.56 ms  (cached)
+Module _factor_solve_lu_sparse_fused__locals__kernel_beb3f816 beb3f81 load on device 'cuda:0' took 1.74 ms  (cached)
+action space:      Box([[-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]], [[1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]], (8, 6), float32)
+observation space: Box(-inf, inf, (8, 6), float32)
+reset -> obs shape=(8, 6) dtype=torch.float32 device=cuda:0
+stepped 20x with random actions, mean reward/step: 0.3388
+last step -> rewards shape=(8,) dtype=torch.float32 device=cuda:0, terminated 0/8, truncated 0/8
+PASS WarpLookAt-v1
+
+=== WarpMove-v1 (GPU / Warp, num_envs=8) ===
+action space:      Box([[-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]], [[1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]], (8, 6), float32)
+observation space: Box(-inf, inf, (8, 6), float32)
+reset -> obs shape=(8, 6) dtype=torch.float32 device=cuda:0
+stepped 20x with random actions, mean reward/step: 0.5513
+last step -> rewards shape=(8,) dtype=torch.float32 device=cuda:0, terminated 1/8, truncated 0/8
+PASS WarpMove-v1
+
+=== WarpPickLift-v1 (GPU / Warp, num_envs=8) ===
+action space:      Box([[-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]], [[1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]], (8, 6), float32)
+observation space: Box(-inf, inf, (8, 18), float32)
+reset -> obs shape=(8, 18) dtype=torch.float32 device=cuda:0
+stepped 20x with random actions, mean reward/step: 0.0597
+last step -> rewards shape=(8,) dtype=torch.float32 device=cuda:0, terminated 0/8, truncated 0/8
+PASS WarpPickLift-v1
+
+=== WarpPickAndPlace-v1 (GPU / Warp, num_envs=8) ===
+action space:      Box([[-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]
+ [-1.91986   -1.7453293 -1.69      -1.65806   -2.7438474 -0.17453  ]], [[1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]
+ [1.91986   1.7453293 1.69      1.65806   2.7438474 1.7453291]], (8, 6), float32)
+observation space: Box(-inf, inf, (8, 24), float32)
+reset -> obs shape=(8, 24) dtype=torch.float32 device=cuda:0
+stepped 20x with random actions, mean reward/step: 0.0754
+last step -> rewards shape=(8,) dtype=torch.float32 device=cuda:0, terminated 0/8, truncated 0/8
+PASS WarpPickAndPlace-v1
+
+=== summary ===
+PASS  MuJoCoTouch-v1
+PASS  MuJoCoLookAt-v1
+PASS  MuJoCoMove-v1
+PASS  MuJoCoPickLift-v1
+PASS  MuJoCoPickAndPlace-v1
+PASS  WarpTouch-v1
+PASS  WarpLookAt-v1
+PASS  WarpMove-v1
+PASS  WarpPickLift-v1
+PASS  WarpPickAndPlace-v1
