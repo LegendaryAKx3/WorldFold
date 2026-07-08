@@ -24,8 +24,26 @@ WARP_ENV_IDS = [
 ]
 
 N_STEPS = 20
-NUM_WARP_ENVS = 8 # my laptop is RTX 5070, 8GB
+NUM_WARP_ENVS = 8 # my laptop is RTX 5070, 8GB, if ur running this on ur local machine change it to ur specs 
 PROOF_DIR = Path(__file__).parent / "proof"
+
+# THIS IS FOR WINDOWS ONLY, dw abt this if ur on mac or linux 
+# so101-nexus 0.4.6 crashes and MuJoCo can't re-open the temp XML and base_env.py never imports mujoco.viewer, this is just a bandaid fix for it on windows
+def apply_windows_patch() -> None:
+    if sys.platform != "win32":
+        return
+    site = Path(sys.prefix) / "Lib" / "site-packages" / "so101_nexus"
+    for path in list(site.glob("mujoco/*.py")) + list(site.glob("warp/*.py")):
+        src = path.read_text(encoding="utf-8")
+        fixed = src.replace(
+            'delete=True) as f:\n            f.write(xml_string)\n            f.flush()',
+            'delete=True, delete_on_close=False) as f:\n            f.write(xml_string)\n            f.close()',
+        )
+        if path.name == "base_env.py" and path.parent.name == "mujoco" and "import mujoco.viewer" not in fixed:
+            fixed = fixed.replace("import mujoco\n", "import mujoco\nimport mujoco.viewer\n", 1)
+        if fixed != src:
+            path.write_text(fixed, encoding="utf-8")
+            print(f"patched for Windows: {path.parent.name}/{path.name}")
 
 def describe(obs) -> str:
     """One-line description of an observation (dict / numpy array / torch tensor)."""
@@ -112,6 +130,7 @@ def run_warp_env(env_id: str) -> bool:
             envs.close()
 
 def main() -> int:
+    apply_windows_patch()  # must run before any so101_nexus import
     argv = sys.argv[1:]
     only_cpu = "--cpu" in argv
     only_warp = "--warp" in argv

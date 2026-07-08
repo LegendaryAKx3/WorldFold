@@ -1,7 +1,5 @@
 '''
-
 Verify installaion
-
 '''
 
 # import so101_nexus.mujoco
@@ -11,15 +9,11 @@ Verify installaion
 # print("Installation OK")
 # env.close()
 
-
 '''
-
-
 
 '''
 
 import time
-
 import gymnasium as gym
 import so101_nexus.mujoco
 import mujoco.viewer
