@@ -3,8 +3,6 @@
 Usage:
     python scripts/run_policy.py --env MuJoCoTouch-v1 --policy random --episodes 5
 
-Swapping policies later (e.g. --policy ppo) requires no changes here — only
-registering the new policy in policy_runner/loader.py.
 """
 
 import argparse
