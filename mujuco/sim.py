@@ -51,7 +51,7 @@ CLOTH_SPACING         = 0.03
 CLOTH_RADIUS          = 0.005
 CLOTH_MASS            = 0.05
 CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2
-CLOTH_SPAWN_Z         = 0.20   # a bit higher so the tilted sheet clears the ball
+CLOTH_SPAWN_Z         = TABLE_TOP_Z + 0.10
 HOVER_Z               = 0.55
 GRIP_Z                = 0.45
 
@@ -104,7 +104,10 @@ def build_xml_file(timestep, mode):
         <light pos="0 0 2" dir="0 0 -1" diffuse="0.9 0.9 0.9"/>
         <light pos="1 -1 1.5" dir="-0.5 0.5 -1" diffuse="0.4 0.4 0.4"/>
         <geom name="floor" type="plane" size="2 2 0.1" rgba="0.3 0.3 0.35 1"/>
-        <camera name="main" pos="0.5 -0.5 0.45" xyaxes="0.707 0.707 0 -0.35 0.35 0.87"/>
+        <geom name="table" type="box" size="0.30 0.30 {TABLE_TOP_Z / 2}"
+                pos="0 0 {TABLE_TOP_Z / 2}" friction="0.8 0.005 0.0001"
+                rgba="0.55 0.4 0.25 1"/>
+        <camera name="main" pos="0.75 -0.75 0.75" xyaxes="0.707 0.707 0 -0.19 0.19 0.96"/>
 
         <flexcomp name="cloth" type="grid" count="{CLOTH_COUNT} {CLOTH_COUNT} 1"
                     spacing="{CLOTH_SPACING} {CLOTH_SPACING} {CLOTH_SPACING}"
