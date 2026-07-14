@@ -46,12 +46,12 @@ from so101_nexus import PickConfig, YCBObject
 import numpy as np
 
 TABLE_TOP_Z           = 0.42
-CLOTH_COUNT           = 11
-CLOTH_SPACING         = 0.02
-CLOTH_RADIUS          = 0.003
+CLOTH_COUNT           = 7
+CLOTH_SPACING         = 0.03
+CLOTH_RADIUS          = 0.005
 CLOTH_MASS            = 0.05
 CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2
-CLOTH_SPAWN_Z         = 0.15  
+CLOTH_SPAWN_Z         = 0.20   # a bit higher so the tilted sheet clears the ball
 HOVER_Z               = 0.55
 GRIP_Z                = 0.45
 
@@ -82,8 +82,8 @@ GRIP_Z                = 0.45
 def build_xml_file(timestep, mode):
     if mode == "native":
         top = ""
-        edge = '<edge damping="0.002"/>'
-        block = '<elasticity young="3e4" poisson="0.0" thickness="1e-3" damping="0.05"/>'
+        edge = '<edge equality="true" damping="0.002"/>'
+        block = ""
     else:
         top = '<extension><plugin plugin="mujoco.elasticity.shell"/></extension>'
         edge = '<edge equality="true" damping="0.002"/>'
@@ -92,6 +92,8 @@ def build_xml_file(timestep, mode):
             <config key="poisson" value="0.0"/>
             <config key="thickness" value="1e-3"/>
         </plugin>"""
+
+    # <geom name="ball" type="sphere" size="0.04" pos="0 0 0.04" rgba="0.4 0.4 0.5 1"/>
 
     xml = f"""
     <mujoco model="cloth_level1">
@@ -106,7 +108,7 @@ def build_xml_file(timestep, mode):
 
         <flexcomp name="cloth" type="grid" count="{CLOTH_COUNT} {CLOTH_COUNT} 1"
                     spacing="{CLOTH_SPACING} {CLOTH_SPACING} {CLOTH_SPACING}"
-                    pos="0 0 {CLOTH_SPAWN_Z}" radius="{CLOTH_RADIUS}" mass="{CLOTH_MASS}"
+                    pos="0 0 {CLOTH_SPAWN_Z}" euler="25 15 0" radius="{CLOTH_RADIUS}" mass="{CLOTH_MASS}"
                     dim="2" rgba="0.8 0.2 0.2 1">
             <contact condim="3" solref="0.01 1" solimp="0.9 0.95 0.001"
                     friction="1.0 0.005 0.0001" selfcollide="none" internal="false"/>
