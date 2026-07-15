@@ -38,7 +38,6 @@ Verify installaion
 ###########################################################################################
 
 import os
-import time
 import gymnasium as gym
 import so101_nexus
 import so101_nexus.mujoco
@@ -71,7 +70,7 @@ MAX_STEP_MOVE    = 0.0002
 MAX_JOINT_STEP   = 0.005
 CLOTH_DAMPING    = 0.3
 
-def build_xml_file(timestep, mode, task):
+def build_xml_file(timestep, task):
 
     # spawns the cloth high and tilted
     if task == "drop":
@@ -79,27 +78,11 @@ def build_xml_file(timestep, mode, task):
     else:
         spawn = f'pos="0 0 {TABLE_TOP_Z + CLOTH_RADIUS + 0.001}"'
 
-    if mode == "native":
-        top = ""
-        edge = '<edge equality="true" damping="0.2"/>'
-        block = ""
-    else:
-        top = '<extension><plugin plugin="mujoco.elasticity.shell"/></extension>'
-        edge = '<edge equality="true" damping="0.002"/>'
-        block = """
-        <plugin plugin="mujoco.elasticity.shell">
-            <config key="young" value="3e4"/>
-            <config key="poisson" value="0.0"/>
-            <config key="thickness" value="1e-3"/>
-        </plugin>
-        """
-
     xml = f"""
 
     <mujoco model="cloth_{task}">
         <option timestep="{timestep}" integrator="implicitfast"/>
         <visual><global offwidth="1280" offheight="720"/></visual>
-        {top}
         <worldbody>
         <light pos="0 0 2" dir="0 0 -1" diffuse="0.9 0.9 0.9"/>
         <light pos="1 -1 1.5" dir="-0.5 0.5 -1" diffuse="0.4 0.4 0.4"/>
@@ -115,8 +98,7 @@ def build_xml_file(timestep, mode, task):
                     dim="2" rgba="0.8 0.2 0.2 1">
             <contact condim="3" solref="0.01 1" solimp="0.95 0.99 0.001"
                     friction="0.4 0.005 0.0001" selfcollide="none" internal="false"/>
-            {edge}
-            {block}
+            <edge equality="true" damping="0.2"/>
         </flexcomp>
         </worldbody>
     </mujoco>
@@ -126,7 +108,7 @@ def build_xml_file(timestep, mode, task):
     return xml
 
 def compile_model(timestep, task):
-    xml = build_xml_file(timestep, mode="native", task=task)
+    xml = build_xml_file(timestep, task=task)
     spec = mujoco.MjSpec.from_string(xml)
 
     if task == "push" or task == "drag":
@@ -136,8 +118,6 @@ def compile_model(timestep, task):
 
     model = spec.compile()
 
-    # damping caps fall speed at mass*gravity/damping (~0.5 m/s even at 0.02),
-    # so drop gets essentially none; push/drag keep the heavy anti-jitter value
     if task == "drop":
         damping = 0.001
     else:
@@ -171,6 +151,41 @@ def cloth_centroid(model, data):
     ids = cloth_body_ids(model)
     return data.xpos[ids].mean(axis=0)
 
+def compute_vertex_normals(vertices, faces):
+    # one upward-pointing unit normal per cloth vertex: sum the normals of every triangle touching the vertex, then normalize
+    normals = np.zeros((len(vertices), 3))
+    for tri in faces:
+        v0 = vertices[tri[0]]
+        v1 = vertices[tri[1]]
+        v2 = vertices[tri[2]]
+        face_normal = np.cross(v1 - v0, v2 - v0)
+        normals[tri[0]] = normals[tri[0]] + face_normal
+        normals[tri[1]] = normals[tri[1]] + face_normal
+        normals[tri[2]] = normals[tri[2]] + face_normal
+
+    for i in range(len(normals)):
+        length = float(np.linalg.norm(normals[i]))
+        if length > 1e-12:
+            normals[i] = normals[i] / length
+        # "pointing up towards the sky": flip any normal facing down
+        if normals[i][2] < 0:
+            normals[i] = -normals[i]
+
+    return normals
+
+# angle in degrees between each vertex normal and the reference normal
+def compute_relative_angles(normals, ref_index):
+    ref = normals[ref_index]
+    angles = np.zeros(len(normals))
+    for i in range(len(normals)):
+        dot = float(np.dot(normals[i], ref))
+        if dot > 1.0:
+            dot = 1.0
+        if dot < -1.0:
+            dot = -1.0
+        angles[i] = np.degrees(np.arccos(dot))
+    return angles
+
 _max_qacc = 0.0
 
 def tracked_step(model, data):
@@ -181,32 +196,7 @@ def tracked_step(model, data):
     if step_qacc > _max_qacc:
         _max_qacc = step_qacc
 
-def step(model, data, viewer):
-    step_start = time.perf_counter()
-    tracked_step(model, data)
-
-    if viewer is not None:
-        viewer.sync()
-
-        # makes it so the sim doesnt finish instantly
-        elapsed = time.perf_counter() - step_start
-        sleep_time = model.opt.timestep - elapsed
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-
-def viewer_running(viewer):
-    if viewer is None:
-        return True
-    return viewer.is_running()
-
-def settle(model, data, viewer, seconds):
-    end_time = data.time + seconds
-    while data.time < end_time and viewer_running(viewer):
-        step(model, data, viewer)
-
 def ik_step(model, data, target, tol=0.008):
-    # ONE nudge of the arm's joint targets toward a cartesian fingertip target.
-    # returns True once the fingertip is within tol. call this once per physics step.
     site_id = model.site("gripperframe").id
     error = np.asarray(target, dtype=float) - data.site_xpos[site_id]
     dist = float(np.linalg.norm(error))
@@ -244,17 +234,6 @@ def ik_step(model, data, target, tol=0.008):
 
     return False
 
-def move_gripper_to(model, data, viewer, target, tol=0.008, timeout=8.0):
-    # blocking version of ik_step, for headless runs and tests
-    end_time = data.time + timeout
-    while viewer_running(viewer) and data.time < end_time:
-        if ik_step(model, data, target, tol):
-            return True
-        step(model, data, viewer)
-
-    print(f"warning: gripper stopped short of target {target}")
-    return False
-
 def close_gripper(model, data):
     gripper_act = model.actuator("gripper").id
     data.ctrl[gripper_act] = GRIPPER_CLOSED
@@ -263,19 +242,19 @@ def make_step_fn(model, data, task):
     end_x = 0.02
     if task == "drag":
         z = DRAG_Z
-        start_x = -CLOTH_HALF + 0.02   # drag starts ON the cloth
+        start_x = -CLOTH_HALF + 0.02   
         waypoints = [
             (start_x, 0, HOVER_Z),
-            (start_x, 0, z),         # descend onto the cloth
-            (end_x, 0, z),           # drag in +x
-            (end_x, 0, HOVER_Z),     # lift
+            (start_x, 0, z), # descend onto the cloth
+            (end_x, 0, z), # drag in +x
+            (end_x, 0, HOVER_Z), # lift
         ]
     else:
         z = PUSH_Z
         waypoints = [
             (-CLOTH_HALF - 0.01, 0, TABLE_TOP_Z + 0.08),
-            (-CLOTH_HALF - 0.03, 0, z),   # descend behind the cloth edge
-            (end_x, 0, z),                # push forward through the cloth
+            (-CLOTH_HALF - 0.03, 0, z),  # descend behind the cloth edge
+            (end_x, 0, z), # push forward through the cloth
             (end_x, 0, TABLE_TOP_Z + 0.08),
         ]
 
@@ -346,7 +325,7 @@ def make_render_fn(model, data):
             side_faces.append([b, b + nvert, a + nvert])
     all_faces = np.concatenate([top_faces, bottom_faces, np.array(side_faces)])
 
-    last = {"drawn": None}
+    last = {"drawn": None, "ref_index": None, "stats_html": None}
 
     def render_fn(scene):
         scene.update_from_mjdata(data)   # everything mjviser normally draws
@@ -366,68 +345,77 @@ def make_render_fn(model, data):
         bottom[:, 2] = bottom[:, 2] - CLOTH_RADIUS
         vertices = np.concatenate([top, bottom])
 
+        # mjviser shifts its whole scene by -tracked_body_pos when camera
+        # tracking is on; everything we draw needs the same shift
+        offset = np.zeros(3)
         if scene.camera_tracking_enabled and scene._tracked_body_id is not None:
-            vertices = vertices - data.xpos[scene._tracked_body_id]
+            offset = data.xpos[scene._tracked_body_id]
+
         scene.server.scene.add_mesh_simple(
             "/cloth",
-            vertices=vertices,
+            vertices=vertices - offset,
             faces=all_faces,
             color=(204, 51, 51),
             side="double",   # cloth is visible from both sides
         )
+
+        # reference "0 degree" vertex 
+        if last["ref_index"] is None:
+            center_xy = drawn[:, 0:2].mean(axis=0)
+            distances = np.linalg.norm(drawn[:, 0:2] - center_xy, axis=1)
+            last["ref_index"] = int(np.argmin(distances))
+        ref_index = last["ref_index"]
+
+        normals = compute_vertex_normals(drawn, faces)
+        angles = compute_relative_angles(normals, ref_index)
+
+        # colored green (0 deg) -> red (90+ deg), ref arrow is blue
+        starts = top
+        ends = starts + normals * 0.025
+        points = np.stack([starts, ends], axis=1)
+        colors = np.zeros((len(starts), 2, 3), dtype=np.uint8)
+        for i in range(len(starts)):
+            t = angles[i] / 90.0
+            if t > 1.0:
+                t = 1.0
+            red = int(255 * t)
+            green = int(255 * (1.0 - t))
+            colors[i, 0] = (red, green, 40)
+            colors[i, 1] = (red, green, 40)
+        colors[ref_index, 0] = (50, 100, 255)
+        colors[ref_index, 1] = (50, 100, 255)
+
+        scene.server.scene.add_line_segments(
+            "/normals", points=points - offset, colors=colors, line_width=3)
+        scene.server.scene.add_label(
+            "/zero_ref", "0° ref", position=ends[ref_index] + np.array([0, 0, 0.01]) - offset)
+
+        # live min/mean/max readout in the side panel
+        if last["stats_html"] is None:
+            last["stats_html"] = scene.server.gui.add_html("")
+        last["stats_html"].content = (
+            f"<div style='padding: 0 1em 0.5em 1em; font-size: 0.85em;'>"
+            f"<strong>Normal angles:</strong> min {angles.min():.1f}° / "
+            f"mean {angles.mean():.1f}° / max {angles.max():.1f}°</div>")
 
     return render_fn
 
 def run_drop():
     model = compile_model(0.001, task="drop")
     data = mujoco.MjData(model)
-    mjviser.Viewer(model, data, step_fn=tracked_step,
-                   render_fn=make_render_fn(model, data)).run()
+    mjviser.Viewer(model, data, step_fn=tracked_step, render_fn=make_render_fn(model, data)).run()
 
-def run_push():
-    model = compile_model(ARM_TIMESTEP, task="push")
+def run_arm_task(task):
+    model = compile_model(ARM_TIMESTEP, task=task)
     data = mujoco.MjData(model)
-    step_fn, reset_fn = make_step_fn(model, data, "push")
-    mjviser.Viewer(model, data, step_fn=step_fn, reset_fn=reset_fn,
-                   render_fn=make_render_fn(model, data)).run()
-
-def run_task_loop(model, data, viewer, task):
-    if task == "drag":
-        z = DRAG_Z
-        start_x = -CLOTH_HALF + 0.02   # drag starts ON the cloth
-    else:
-        z = PUSH_Z
-        start_x = -CLOTH_HALF - 0.05   # push starts outside the cloth edge
-    end_x = 0.02
-
-    settle(model, data, viewer, 0.5)
-    move_gripper_to(model, data, viewer, (end_x, 0, z))
-    close_gripper(model, data)
-    move_gripper_to(model, data, viewer, (end_x+0.002, 0, z))
-    start_centroid = cloth_centroid(model, data)
-
-    settle(model, data, viewer, 1.0)
-
-    end_centroid = cloth_centroid(model, data)
-    dx = end_centroid[0] - start_centroid[0]
-    print(f"centroid moved {dx * 100:.1f} cm in +x")
-    assert dx > 0.02, "FAIL: cloth barely moved"
-    print("PASS")
-
-def run_drag():
-    model = compile_model(ARM_TIMESTEP, task="drag")
-    data = mujoco.MjData(model)
-    step_fn, reset_fn = make_step_fn(model, data, "drag")
-    mjviser.Viewer(model, data, step_fn=step_fn, reset_fn=reset_fn,
-                   render_fn=make_render_fn(model, data)).run()
+    step_fn, reset_fn = make_step_fn(model, data, task)
+    mjviser.Viewer(model, data, step_fn=step_fn, reset_fn=reset_fn, render_fn=make_render_fn(model, data)).run()
 
 def main():
     if TASK == "drop":
         run_drop()
-    elif TASK == "push":
-        run_push()
-    elif TASK == "drag":
-        run_drag()
+    elif TASK == "push" or TASK == "drag":
+        run_arm_task(TASK)
     else:
         print(f"unknown task: {TASK} (use drop|push|drag)")
         return
