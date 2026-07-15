@@ -37,7 +37,6 @@ Verify installaion
 # env.close()
 ###########################################################################################
 
-
 import os
 import time
 import gymnasium as gym
@@ -48,7 +47,7 @@ from so101_nexus import PickConfig, YCBObject
 import numpy as np
 import mjviser
 
-TASK                  = "drag"           # the options are: drop, push, drag
+TASK                  = "drag" # the options are: drop, push, drag
 TABLE_TOP_Z           = 0.42
 CLOTH_COUNT           = 7
 CLOTH_SPACING         = 0.03
@@ -63,26 +62,26 @@ GRIP_Z                = 0.45
 ARM_XML_PATH     = os.path.join(os.path.dirname(so101_nexus.__file__), "assets", "SO101", "so101_new_calib.xml")
 ARM_BASE_POS     = (-0.25, 0, TABLE_TOP_Z)
 ARM_JOINTS       = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
-GRIPPER_CLOSED   = -0.1
+GRIPPER_CLOSED   = 0.2                   # mostly closed; -0.1 jams the jaw into its own finger pad
 
-PUSH_Z           = TABLE_TOP_Z + 0.010   # fingertip height while pushing; tune +-2mm
-DRAG_Z           = TABLE_TOP_Z + 0.006   # fingertip height while dragging; tune +-2mm
-ARM_TIMESTEP     = 0.0005                # push/drag need 0.5ms; 1ms explodes on contact
-MAX_STEP_MOVE    = 0.0002                # m per step = 0.4 m/s at 0.5ms steps
+PUSH_Z           = TABLE_TOP_Z + 0.022  
+DRAG_Z           = TABLE_TOP_Z + 0.010  
+ARM_TIMESTEP     = 0.0005              
+MAX_STEP_MOVE    = 0.0002  
 MAX_JOINT_STEP   = 0.005
-CLOTH_DAMPING    = 0.02                  # viscous damping per cloth vertex DOF; calms jitter/explosions
+CLOTH_DAMPING    = 0.3
 
 def build_xml_file(timestep, mode, task):
 
-    # drop spawns the cloth high and tilted; push/drag spawn it flat on the table
+    # spawns the cloth high and tilted
     if task == "drop":
         spawn = f'pos="0 0 {CLOTH_SPAWN_Z}" euler="25 15 0"'
     else:
-        spawn = f'pos="0 0 {TABLE_TOP_Z + 0.02}"'
+        spawn = f'pos="0 0 {TABLE_TOP_Z + CLOTH_RADIUS + 0.001}"'
 
     if mode == "native":
         top = ""
-        edge = '<edge equality="true" damping="0.002"/>'
+        edge = '<edge equality="true" damping="0.2"/>'
         block = ""
     else:
         top = '<extension><plugin plugin="mujoco.elasticity.shell"/></extension>'
@@ -106,7 +105,7 @@ def build_xml_file(timestep, mode, task):
         <light pos="1 -1 1.5" dir="-0.5 0.5 -1" diffuse="0.4 0.4 0.4"/>
         <geom name="floor" type="plane" size="2 2 0.1" rgba="0.3 0.3 0.35 1"/>
         <geom name="table" type="box" size="0.30 0.30 {TABLE_TOP_Z / 2}"
-                pos="0 0 {TABLE_TOP_Z / 2}" friction="0.8 0.005 0.0001"
+                pos="0 0 {TABLE_TOP_Z / 2}" friction="0.4 0.005 0.0001"
                 rgba="0.55 0.4 0.25 1"/>
         <camera name="main" pos="0.75 -0.75 0.75" xyaxes="0.707 0.707 0 -0.19 0.19 0.96"/>
 
@@ -114,8 +113,8 @@ def build_xml_file(timestep, mode, task):
                     spacing="{CLOTH_SPACING} {CLOTH_SPACING} {CLOTH_SPACING}"
                     {spawn} radius="{CLOTH_RADIUS}" mass="{CLOTH_MASS}"
                     dim="2" rgba="0.8 0.2 0.2 1">
-            <contact condim="3" solref="0.02 1" solimp="0.8 0.9 0.01"
-                    friction="1.0 0.005 0.0001" selfcollide="none" internal="false"/>
+            <contact condim="3" solref="0.01 1" solimp="0.95 0.99 0.001"
+                    friction="0.4 0.005 0.0001" selfcollide="none" internal="false"/>
             {edge}
             {block}
         </flexcomp>
@@ -130,7 +129,6 @@ def compile_model(timestep, task):
     xml = build_xml_file(timestep, mode="native", task=task)
     spec = mujoco.MjSpec.from_string(xml)
 
-    # push/drag get the real SO101 arm mounted on the table
     if task == "push" or task == "drag":
         arm_spec = mujoco.MjSpec.from_file(ARM_XML_PATH)
         frame = spec.worldbody.add_frame(pos=ARM_BASE_POS)
@@ -138,12 +136,26 @@ def compile_model(timestep, task):
 
     model = spec.compile()
 
-    # calm the cloth: light viscous damping on every cloth vertex DOF
-    # (the cloth's joints are the unnamed ones; the arm's joints have names)
+    # damping caps fall speed at mass*gravity/damping (~0.5 m/s even at 0.02),
+    # so drop gets essentially none; push/drag keep the heavy anti-jitter value
+    if task == "drop":
+        damping = 0.001
+    else:
+        damping = CLOTH_DAMPING
+
     for i in range(model.njnt):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
         if name is None:
-            model.dof_damping[model.jnt_dofadr[i]] = CLOTH_DAMPING
+            model.dof_damping[model.jnt_dofadr[i]] = damping
+
+    # the arm's finger pads ship as 1.25mm boxes with very stiff contact params, which explode the 1-gram cloth vertices on touch. soften and enlarge them.
+    if task == "push" or task == "drag":
+        for pad in ["static_finger_pad", "moving_finger_pad"]:
+            g = model.geom(pad).id
+            model.geom_condim[g] = 3
+            model.geom_solref[g] = [0.02, 1]
+            model.geom_solimp[g] = [0.8, 0.9, 0.01, 0.5, 2]
+            model.geom_size[g] = [0.004, 0.004, 0.004]
 
     return model
 
@@ -162,7 +174,6 @@ def cloth_centroid(model, data):
 _max_qacc = 0.0
 
 def tracked_step(model, data):
-    # one physics step + health tracking (this is what mjviser calls each step)
     global _max_qacc
     mujoco.mj_step(model, data)
 
@@ -174,7 +185,6 @@ def step(model, data, viewer):
     step_start = time.perf_counter()
     tracked_step(model, data)
 
-    # viewer=None runs headless (for tests); skip drawing and realtime pacing
     if viewer is not None:
         viewer.sync()
 
@@ -262,8 +272,6 @@ def make_step_fn(model, data, task):
         ]
     else:
         z = PUSH_Z
-        # the arm can't hover directly above a point this close to its own base,
-        # so pull back high first, then descend just behind the cloth edge
         waypoints = [
             (-CLOTH_HALF - 0.01, 0, TABLE_TOP_Z + 0.08),
             (-CLOTH_HALF - 0.03, 0, z),   # descend behind the cloth edge
@@ -271,7 +279,6 @@ def make_step_fn(model, data, task):
             (end_x, 0, TABLE_TOP_Z + 0.08),
         ]
 
-    # mutable progress shared between calls (a dict because step_fn can't reassign locals)
     state = {"index": 0, "deadline": None,
              "start_centroid": None, "finished_time": None, "checked": False}
 
@@ -285,8 +292,8 @@ def make_step_fn(model, data, task):
                 if state["deadline"] is None:
                     state["deadline"] = data.time + 5.0
                 reached = ik_step(model, data, waypoints[state["index"]])
-                # move on after 5s even if not reached, so one unreachable
-                # waypoint can't stall the whole trajectory forever
+
+                # move on after 5s even if not reached
                 if reached or data.time > state["deadline"]:
                     if not reached:
                         print(f"waypoint {state['index']} not reached, moving on")
@@ -306,8 +313,7 @@ def make_step_fn(model, data, task):
         tracked_step(model, data)
 
     def reset_fn(model, data):
-        # called by the viewer's Reset button: rewind the physics AND the script,
-        # so pressing Reset then Play replays the whole trajectory
+        # called by the viewer's Reset button
         mujoco.mj_resetData(model, data)
         mujoco.mj_forward(model, data)
         state["index"] = 0
@@ -319,23 +325,53 @@ def make_step_fn(model, data, task):
     return step_fn, reset_fn
 
 def make_render_fn(model, data):
-    # mjviser only draws geoms and skips flex objects entirely, so the cloth
-    # would be invisible -- push it to the browser ourselves as a triangle mesh.
-    # faces never change, so build them once; vertex positions update every frame.
+
     faces = np.array(model.flex_elem).reshape(-1, 3)
+    nvert = int(faces.max()) + 1
+
+    top_faces = faces
+    bottom_faces = faces[:, ::-1] + nvert   # reversed winding, bottom vertex set
+    edge_count = {}
+    for tri in faces:
+        for k in range(3):
+            a = int(tri[k])
+            b = int(tri[(k + 1) % 3])
+            if a > b:
+                a, b = b, a
+            edge_count[(a, b)] = edge_count.get((a, b), 0) + 1
+    side_faces = []
+    for (a, b), count in edge_count.items():
+        if count == 1:   # edge belongs to only one triangle = cloth boundary
+            side_faces.append([a, b, a + nvert])
+            side_faces.append([b, b + nvert, a + nvert])
+    all_faces = np.concatenate([top_faces, bottom_faces, np.array(side_faces)])
+
+    last = {"drawn": None}
 
     def render_fn(scene):
         scene.update_from_mjdata(data)   # everything mjviser normally draws
-        vertices = np.array(data.flexvert_xpos)
+        centers = np.array(data.flexvert_xpos)
 
-        # mjviser shifts its whole scene by -tracked_body_pos when "Track camera"
-        # is on (it is by default), so shift the cloth the same way or it floats
+        if last["drawn"] is None:
+            drawn = centers
+        else:
+            drawn = last["drawn"].copy()
+            moved = np.linalg.norm(centers - drawn, axis=1) > 0.0015
+            drawn[moved] = centers[moved]
+        last["drawn"] = drawn
+
+        top = drawn.copy()
+        top[:, 2] = top[:, 2] + CLOTH_RADIUS
+        bottom = drawn.copy()
+        bottom[:, 2] = bottom[:, 2] - CLOTH_RADIUS
+        vertices = np.concatenate([top, bottom])
+
         if scene.camera_tracking_enabled and scene._tracked_body_id is not None:
             vertices = vertices - data.xpos[scene._tracked_body_id]
         scene.server.scene.add_mesh_simple(
             "/cloth",
             vertices=vertices,
-            faces=faces,
+            faces=all_faces,
             color=(204, 51, 51),
             side="double",   # cloth is visible from both sides
         )
