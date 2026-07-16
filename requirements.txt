@@ -1,2 +1,4 @@
 so101-nexus
 gymnasium
+stable-baselines3
+tensorboard

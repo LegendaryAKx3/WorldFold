@@ -23,6 +23,9 @@ def parse_args():
     parser.add_argument("--episodes", type=int, default=5, help="Number of episodes to run")
     parser.add_argument("--max-steps", type=int, default=500, help="Max steps per episode")
     parser.add_argument("--seed", type=int, default=0, help="Seed for env reset")
+    parser.add_argument(
+        "--checkpoint", default=None, help="Checkpoint path, for policies that need one (e.g. ppo)"
+    )
     return parser.parse_args()
 
 
@@ -63,7 +66,8 @@ def main():
 
     register_env_backends(args.env)
     env = gym.make(args.env)
-    policy = load_policy(args.policy, env.action_space, env.observation_space)
+    policy_kwargs = {"checkpoint": args.checkpoint} if args.checkpoint else {}
+    policy = load_policy(args.policy, env.action_space, env.observation_space, **policy_kwargs)
 
     rewards = []
     lengths = []

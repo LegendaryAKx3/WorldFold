@@ -4,3 +4,4 @@ env/
 __pycache__/
 *.py[cod]
 outputs/molmoact_import/
+outputs/ppo/
