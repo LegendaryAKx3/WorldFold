@@ -1,4 +1,8 @@
-so101-nexus
-gymnasium
+so101-nexus==0.4.8
+gymnasium==1.3.0
+mjviser==0.0.14
+mujoco==3.10.0
+numpy==2.5.1
+imageio==2.37.3
 stable-baselines3
 tensorboard
