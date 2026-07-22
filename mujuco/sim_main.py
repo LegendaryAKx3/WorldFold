@@ -24,7 +24,7 @@ ARM_BASE_RIGHT        = ( 0.30, -CLOTH_HALF, TABLE_TOP_Z)
 ARM_JOINTS            = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 GRIPPER_CLOSED        = -0.1
 ARM_TIMESTEP         = 0.0005     # contact-heavy grasp needs 0.5ms; 1ms explodes on contact
-MAX_STEP_MOVE        = 0.00015    # m per step = 0.3 m/s at 0.5ms steps; gentler approach = softer contact
+MAX_STEP_MOVE        = 0.0003    # max amount can move per step
 MAX_JOINT_STEP       = 0.005
 CLOTH_DAMPING        = 0.3        # viscous damping per cloth vertex DOF; calms jitter/explosions (level3 value)
 PULL_DIST            = 0.13       # how far each arm drags its corner outward (toward its base)
@@ -45,11 +45,11 @@ CORNER_PLACED_DIST   = 0.03
 ANCHOR_SLACK         = 0.05
 QACC_LIMIT           = 1e5
 
-class ClothFoldingEnv(gym.Env):
+class ClothFoldEnv(gym.Env):
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
-    
-    def __init__(self, control_dt=0.05, max_episode_steps=200):
+
+    def __init__(self, control_dt=0.05, max_episode_steps=200, action_scale_pos=0.03, action_scale_rot=0.1):
         self.control_dt = control_dt
         self.max_episode_steps = max_episode_steps
         self.n_substeps = int(round(control_dt / ARM_TIMESTEP))   # 100
@@ -58,9 +58,46 @@ class ClothFoldingEnv(gym.Env):
         self.data = mujoco.MjData(self.model)
         self.prefixes = ["left_", "right_"]
 
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(14,),
-                                            dtype=np.float32)
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(14,), dtype=np.float32)
         self._step_count = 0
+
+        self.action_scale_pos = action_scale_pos
+        self.action_scale_rot = action_scale_rot
+        self._site_id = {}
+        self._arm_qpos_adr = {}
+        self._arm_dof_adr = {}
+        self._arm_act_id = {}
+        for prefix in self.prefixes:
+            site = self.model.site(f"{prefix}gripperframe")
+            self._site_id[prefix] = site.id
+            qpos_adrs = []
+            dof_adrs = []
+            act_ids = []
+            for name in ARM_JOINTS:
+                joint = self.model.joint(f"{prefix}{name}")
+                qpos_adrs.append(joint.qposadr[0])
+                dof_adrs.append(joint.dofadr[0])
+                actuator = self.model.actuator(f"{prefix}{name}")
+                act_ids.append(actuator.id)
+            self._arm_qpos_adr[prefix] = qpos_adrs
+            self._arm_dof_adr[prefix] = dof_adrs
+            self._arm_act_id[prefix] = act_ids
+        self._target_pos = {}
+        self._target_quat = {}
+
+        self._weld_id = {}
+        self._gripper_act = {}
+        self._corner_body = {}
+        self._gripper_closed = {"left_": False, "right_": False}
+        corner_names = {"left_": f"cloth_{CLOTH_COUNT - 1}",
+                        "right_": f"cloth_{(CLOTH_COUNT - 1) * CLOTH_COUNT}"}
+        for prefix in self.prefixes:
+            weld = self.model.equality(f"{prefix}weld")
+            self._weld_id[prefix] = weld.id
+            gripper_actuator = self.model.actuator(f"{prefix}gripper")
+            self._gripper_act[prefix] = gripper_actuator.id
+            corner = self.model.body(corner_names[prefix])
+            self._corner_body[prefix] = corner.id
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -68,23 +105,136 @@ class ClothFoldingEnv(gym.Env):
         for prefix in self.prefixes:
             gripper_act = self.model.actuator(f"{prefix}gripper").id
             self.data.ctrl[gripper_act] = GRIPPER_OPEN
+            self.data.eq_active[self._weld_id[prefix]] = 0
+            self._gripper_closed[prefix] = False
         mujoco.mj_forward(self.model, self.data)
         for _ in range(SETTLE_STEPS):
             mujoco.mj_step(self.model, self.data)
+        for prefix in self.prefixes:
+            site_id = self._site_id[prefix]
+            self._target_pos[prefix] = np.array(self.data.site_xpos[site_id])
+            quat = np.zeros(4)
+            mujoco.mju_mat2Quat(quat, self.data.site_xmat[site_id])
+            self._target_quat[prefix] = quat
         self._step_count = 0
         return {}, {}
     
+    def update_ee_target(self, prefix, pos_delta, rot_delta):
+        delta = np.asarray(pos_delta, dtype=float) * self.action_scale_pos
+        new_pos = self._target_pos[prefix] + delta
+        if new_pos[0] < -WORKSPACE_XY:
+            new_pos[0] = -WORKSPACE_XY
+        if new_pos[0] > WORKSPACE_XY:
+            new_pos[0] = WORKSPACE_XY
+        if new_pos[1] < -WORKSPACE_XY:
+            new_pos[1] = -WORKSPACE_XY
+        if new_pos[1] > WORKSPACE_XY:
+            new_pos[1] = WORKSPACE_XY
+        if new_pos[2] < WORKSPACE_Z_LOW:
+            new_pos[2] = WORKSPACE_Z_LOW
+        if new_pos[2] > WORKSPACE_Z_HIGH:
+            new_pos[2] = WORKSPACE_Z_HIGH
+        self._target_pos[prefix] = new_pos
+        rotvec = np.asarray(rot_delta, dtype=float) * self.action_scale_rot
+        mujoco.mju_quatIntegrate(self._target_quat[prefix], rotvec, 1.0)
+
+    def ik_substep(self, prefix):
+        # 6D best-effort version of ik_step() above (5-DOF arm, so rotation is a down-weighted wish so bc of that position dominates)
+        site_id = self._site_id[prefix]
+        err_pos = self._target_pos[prefix] - self.data.site_xpos[site_id]
+        dist = float(np.linalg.norm(err_pos))
+        if dist > MAX_STEP_MOVE:
+            err_pos = err_pos * (MAX_STEP_MOVE / dist)
+        site_quat = np.zeros(4)
+        mujoco.mju_mat2Quat(site_quat, self.data.site_xmat[site_id])
+        err_rot = np.zeros(3)
+        mujoco.mju_subQuat(err_rot, self._target_quat[prefix], site_quat)
+        rot_norm = float(np.linalg.norm(err_rot))
+        if rot_norm > MAX_STEP_ROT:
+            err_rot = err_rot * (MAX_STEP_ROT / rot_norm)
+
+        jacp = np.zeros((3, self.model.nv))
+        jacr = np.zeros((3, self.model.nv))
+        mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
+        dofs = self._arm_dof_adr[prefix]
+        jac_pos = jacp[:, dofs]
+        jac_rot = ROT_WEIGHT * jacr[:, dofs]
+        J = np.vstack([jac_pos, jac_rot])
+        weighted_rot = ROT_WEIGHT * err_rot
+        err = np.concatenate([err_pos, weighted_rot])
+        solution = np.linalg.lstsq(J, err, rcond=None)
+        dq = solution[0]
+        biggest = float(np.max(np.abs(dq)))
+        if biggest > MAX_JOINT_STEP:
+            dq = dq * (MAX_JOINT_STEP / biggest)
+
+        for k in range(len(ARM_JOINTS)):
+            qpos_adr = self._arm_qpos_adr[prefix][k]
+            act_id = self._arm_act_id[prefix][k]
+            new_target = self.data.qpos[qpos_adr] + dq[k]
+            low = self.model.actuator_ctrlrange[act_id][0]
+            high = self.model.actuator_ctrlrange[act_id][1]
+            if new_target < low:
+                new_target = low
+            if new_target > high:
+                new_target = high
+            self.data.ctrl[act_id] = new_target
+
+    def set_gripper(self, prefix, command):
+        # hysteresis: < -0.3 close, > 0.3 open, else hold current state
+        if command < -0.3:
+            self._gripper_closed[prefix] = True
+        elif command > 0.3:
+            self._gripper_closed[prefix] = False
+        act_id = self._gripper_act[prefix]
+        eqid = self._weld_id[prefix]
+        if self._gripper_closed[prefix]:
+            self.data.ctrl[act_id] = GRIPPER_CLOSED
+            if self.data.eq_active[eqid] == 0:
+                site = self.data.site_xpos[self._site_id[prefix]]
+                corner = self.data.xpos[self._corner_body[prefix]]
+                gap = float(np.linalg.norm(site - corner))
+                if gap < GRASP_RADIUS:
+                    b1 = self.model.eq_obj1id[eqid]
+                    b2 = self.model.eq_obj2id[eqid]
+                    R1 = self.data.xmat[b1].reshape(3, 3)
+                    offset_world = self.data.xpos[b2] - self.data.xpos[b1]
+                    offset_local = R1.T @ offset_world
+                    self.model.eq_data[eqid, 3:6] = offset_local
+                    self.data.eq_active[eqid] = 1
+        else:
+            self.data.ctrl[act_id] = GRIPPER_OPEN
+            self.data.eq_active[eqid] = 0
+
     def step(self, action):
-        for _ in range(self.n_substeps):
+        raw = np.asarray(action, dtype=np.float32)
+        raw = raw.reshape(14)
+        clipped = np.clip(raw, -1.0, 1.0)
+
+        self.set_gripper("left_", float(clipped[6]))
+        self.set_gripper("right_", float(clipped[13]))
+
+        self.update_ee_target("left_", clipped[0:3], clipped[3:6])
+        self.update_ee_target("right_", clipped[7:10], clipped[10:13])
+        for i in range(self.n_substeps):
+            self.ik_substep("left_")
+            self.ik_substep("right_")
             mujoco.mj_step(self.model, self.data)
+
         self._step_count += 1
         return {}, 0.0, False, False, {}
 
 def run_env_check():
-    env = ClothFoldingEnv()
+    env = ClothFoldEnv()
     env.reset(seed=0)
-    env.step(np.zeros(14))
-    print("testing")
+    site_id = env._site_id["left_"]
+    print("start z:", env.data.site_xpos[site_id][2])
+    action = np.zeros(14)
+    action[2] = -1.0   # push left EE down
+    for i in range(10):
+        env.step(action)
+    print("end z:  ", env.data.site_xpos[site_id][2])
+    print("milestone 2: z should have dropped ~0.1m")
 
 def build_cloth_xml(timestep):
     # flat cloth spawned already at rest on the table (no drop -> no bounce/jitter)
@@ -175,162 +325,6 @@ def compile_model(timestep):
 
     return model
 
-def cloth_x_extent(model, data):
-    # width of the cloth along x -- grows as the two arms pull the corners apart
-    xs = np.array(data.flexvert_xpos)[:, 0]
-    return float(xs.max() - xs.min())
-
-_max_qacc = 0.0
-
-def tracked_step(model, data):
-    global _max_qacc
-    mujoco.mj_step(model, data)
-    step_qacc = float(np.max(np.abs(data.qacc)))
-    if step_qacc > _max_qacc:
-        _max_qacc = step_qacc
-
-def step(model, data, viewer):
-    step_start = time.perf_counter()
-    tracked_step(model, data)
-    if viewer is not None:
-        viewer.sync()
-        elapsed = time.perf_counter() - step_start
-        sleep_time = model.opt.timestep - elapsed
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-
-def ik_step(model, data, target, prefix, tol=0.008):
-    # ONE nudge of ONE arm's joint targets toward a cartesian fingertip target.
-    # `prefix` selects which arm ("left_" / "right_"). returns True once within tol.
-    site_id = model.site(f"{prefix}gripperframe").id
-    error = np.asarray(target, dtype=float) - data.site_xpos[site_id]
-    dist = float(np.linalg.norm(error))
-    if dist < tol:
-        return True
-
-    step_vec = error
-    if dist > MAX_STEP_MOVE:
-        step_vec = error * (MAX_STEP_MOVE / dist)
-
-    jacp = np.zeros((3, model.nv))
-    mujoco.mj_jacSite(model, data, jacp, None, site_id)
-    dof_ids = []
-    for name in ARM_JOINTS:
-        dof_ids.append(model.joint(f"{prefix}{name}").dofadr[0])
-    J = jacp[:, dof_ids]
-
-    # solve J * dq = step_vec for the smallest joint motion dq
-    dq = np.linalg.lstsq(J, step_vec, rcond=None)[0]
-    biggest = float(np.max(np.abs(dq)))
-    if biggest > MAX_JOINT_STEP:
-        dq = dq * (MAX_JOINT_STEP / biggest)
-
-    for k in range(len(ARM_JOINTS)):
-        jname = f"{prefix}{ARM_JOINTS[k]}"
-        qpos_addr = model.joint(jname).qposadr[0]
-        act_id = model.actuator(jname).id
-        new_target = data.qpos[qpos_addr] + dq[k]
-        low = model.actuator_ctrlrange[act_id][0]
-        high = model.actuator_ctrlrange[act_id][1]
-        if new_target < low:
-            new_target = low
-        if new_target > high:
-            new_target = high
-        data.ctrl[act_id] = new_target
-
-    return False
-
-def close_gripper(model, data, prefix):
-    gripper_act = model.actuator(f"{prefix}gripper").id
-    data.ctrl[gripper_act] = GRIPPER_CLOSED
-    # SIM-ONLY: weld the corner vertex to the gripper (real friction grip is too weak).
-    # set the weld's relpose_pos to the corner's position in the gripper's CURRENT frame,
-    # so the cloth is pinned right where the fingers are at grab (not the home-pose offset).
-    eqid = model.equality(f"{prefix}weld").id
-    b1 = model.eq_obj1id[eqid]           # gripper hand
-    b2 = model.eq_obj2id[eqid]           # corner cloth vertex
-    R1 = data.xmat[b1].reshape(3, 3)
-    model.eq_data[eqid, 3:6] = R1.T @ (data.xpos[b2] - data.xpos[b1])
-    data.eq_active[eqid] = 1
-
-def make_arm(prefix, corner_xy, pull_dx):
-    # corner_xy = (x, y) of the front corner this arm grabs
-    # pull_dx   = how far in x to drag it once grabbed (- for left, + for right)
-    cx, cy = corner_xy
-    # with the corner welded to the gripper (see close_gripper), drag it horizontally
-    # outward toward the arm's base -- the arm can't lift here (it just retracts), but
-    # retracting IS the outward drag, and the weld carries the corner along reliably.
-    waypoints = [
-        (cx, cy, HOVER_Z),               # hover above the corner
-        (cx, cy, GRAB_Z),                # descend onto the corner (grab -> weld on)
-        (cx + pull_dx, cy, GRAB_Z),      # drag the corner outward horizontally
-        (cx + pull_dx, cy, GRAB_Z),      # hold at the stretched position
-    ]
-    return {"prefix": prefix, "waypoints": waypoints,
-            "index": 0, "deadline": None, "grabbed": False}
-
-def drive_arm(model, data, arm):
-    # advance ONE arm by one waypoint-nudge
-    wp = arm["waypoints"]
-    p = arm["prefix"]
-    if arm["index"] >= len(wp):
-        return
-    if arm["deadline"] is None:
-        arm["deadline"] = data.time + 5.0
-
-    reached = ik_step(model, data, wp[arm["index"]], p)
-
-    # GRAB when the fingertip is genuinely NEAR the corner (wp[1]), not merely when the
-    # waypoint index ticks over. welding while still far freezes a big gripper->cloth
-    # offset, so the cloth trails 8cm from the claw (looks like telekinesis). gating on
-    # proximity locks in a <2cm offset -> the cloth sits right at the gripper.
-    if not arm["grabbed"] and arm["index"] >= 1:
-        sid = model.site(f"{p}gripperframe").id
-        if np.linalg.norm(data.site_xpos[sid] - np.array(wp[1])) < 0.02:
-            close_gripper(model, data, p)
-            arm["grabbed"] = True
-
-    if reached or data.time > arm["deadline"]:
-        if not reached:
-            print(f"{p}waypoint {arm['index']} not reached, moving on")
-        arm["index"] += 1
-        arm["deadline"] = None
-
-def make_step_fn(model, data):
-    # front-left and front-right corners of the cloth (y = +CLOTH_HALF edge)
-    arms = [
-        make_arm("left_",  (-CLOTH_HALF, CLOTH_HALF), -PULL_DIST),
-        make_arm("right_", ( CLOTH_HALF, -CLOTH_HALF), +PULL_DIST),
-    ]
-    state = {"start_extent": None, "finished": False}
-
-    def step_fn(model, data):
-        if data.time > 1.0:   # first 1.0s: hands off, let the cloth settle flat
-            if state["start_extent"] is None:
-                state["start_extent"] = cloth_x_extent(model, data)
-            for arm in arms:
-                drive_arm(model, data, arm)
-
-            # both arms done -> report how much the cloth stretched, once
-            if not state["finished"] and all(a["index"] >= len(a["waypoints"]) for a in arms):
-                state["finished"] = True
-                grew = cloth_x_extent(model, data) - state["start_extent"]
-                print(f"cloth x-extent grew {grew * 100:.1f} cm")
-                print("PASS" if grew > 0.02 else "FAIL: corners barely moved")
-
-        tracked_step(model, data)
-
-    def reset_fn(model, data):
-        # viewer Reset button: rewind physics AND both arms' scripts
-        mujoco.mj_resetData(model, data)
-        mujoco.mj_forward(model, data)
-        for i, arm in enumerate(arms):
-            arm.update({"index": 0, "deadline": None, "grabbed": False})
-        state["start_extent"] = None
-        state["finished"] = False
-
-    return step_fn, reset_fn
-
 def make_render_fn(model, data):
     # mjviser skips flex objects, so push the cloth to the browser as a triangle mesh.
     # build ONE closed slab: top surface + bottom surface + side walls, so it reads
@@ -384,13 +378,49 @@ def make_render_fn(model, data):
         )
     return render_fn
 
+def test_idk(env):
+    action = np.zeros(14, dtype=np.float32)
+    pos_slice = {"left_": 0, "right_": 7}
+    grip_index = {"left_": 6, "right_": 13}
+    for prefix in env.prefixes:
+        site = env.data.site_xpos[env._site_id[prefix]]
+        weld_active = env.data.eq_active[env._weld_id[prefix]]
+        if weld_active:
+            target = np.array([0.0, 0.0, TABLE_TOP_Z + 0.10])
+        else:
+            target = env.data.xpos[env._corner_body[prefix]]
+        direction = target - site
+        cmd = np.clip(direction * 20.0, -1.0, 1.0)
+        start = pos_slice[prefix]
+        action[start] = cmd[0]
+        action[start + 1] = cmd[1]
+        action[start + 2] = cmd[2]
+        action[grip_index[prefix]] = -1.0
+    return action
+
 def main():
-    model = compile_model(ARM_TIMESTEP)
-    data = mujoco.MjData(model)
-    step_fn, reset_fn = make_step_fn(model, data)
-    mjviser.Viewer(model, data, step_fn=step_fn, reset_fn=reset_fn,
-                   render_fn=make_render_fn(model, data)).run()
-    print(f"max |qacc|: {_max_qacc:.1f}  (healthy: <1e3-ish; 1e5+ is no good)")
+    env = ClothFoldEnv()
+    env.reset(seed=0)
+    state = {"i": 0}
+
+    def step_fn(model, data):
+        if state["i"] % env.n_substeps == 0:
+            action = test_idk(env)
+            clipped = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+            env.set_gripper("left_", float(clipped[6]))
+            env.set_gripper("right_", float(clipped[13]))
+            env.update_ee_target("left_", clipped[0:3], clipped[3:6])
+            env.update_ee_target("right_", clipped[7:10], clipped[10:13])
+        env.ik_substep("left_")
+        env.ik_substep("right_")
+        mujoco.mj_step(model, data)
+        state["i"] += 1
+
+    def reset_fn(model, data):
+        env.reset(seed=0)
+        state["i"] = 0
+
+    mjviser.Viewer(env.model, env.data, step_fn=step_fn, reset_fn=reset_fn, render_fn=make_render_fn(env.model, env.data)).run()
 
 if __name__ == "__main__":
-    run_env_check()
+    main()
