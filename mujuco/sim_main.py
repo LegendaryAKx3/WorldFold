@@ -45,69 +45,46 @@ CORNER_PLACED_DIST   = 0.03
 ANCHOR_SLACK         = 0.05
 QACC_LIMIT           = 1e5
 
-class ClothFolding(gym.Env):
+class ClothFoldingEnv(gym.Env):
 
-    def __init__(self, control_dt=0.05, max_episode_steps=200, action_mode="ee_delta", observation_mode="state", image_size=(84, 84), camera_names=("main", "left_wrist_cam", "right_wrist_cam"), action_scale_pos=0.015, action_scale_rot=0.10, domain_randomization=False, render_mode=None):
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
+    
+    def __init__(self, control_dt=0.05, max_episode_steps=200):
         self.control_dt = control_dt
         self.max_episode_steps = max_episode_steps
-        self.action_mode = action_mode
-        self.observation_mode = observation_mode
-        self.image_size = tuple(image_size)
-        self.camera_names = list(camera_names)
-        self.action_scale_pos = action_scale_pos
-        self.action_scale_rot = action_scale_rot
-        self.domain_randomization = domain_randomization
-        self.render_mode = render_mode
-        self.n_substeps = int(round(control_dt / ARM_TIMESTEP))
+        self.n_substeps = int(round(control_dt / ARM_TIMESTEP))   # 100
+
         self.model = compile_model(ARM_TIMESTEP)
         self.data = mujoco.MjData(self.model)
-        self.renderer = None
-
         self.prefixes = ["left_", "right_"]
-        self._site_id = {}
-        self._weld_id = {}
-        self._gripper_act = {}
-        self._arm_qpos_adr = {}
-        self._arm_dof_adr = {}
-        self._arm_act_id = {}
-        self._gripper_qpos_adr = {}
-        self._gripper_dof_adr = {}
+
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(14,),
+                                            dtype=np.float32)
+        self._step_count = 0
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        mujoco.mj_resetData(self.model, self.data)
         for prefix in self.prefixes:
-            site = self.model.site(f"{prefix}gripperframe")
-            self._site_id[prefix] = site.id
-            weld = self.model.equality(f"{prefix}weld")
-            self._weld_id[prefix] = weld.id
-            gripper_actuator = self.model.actuator(f"{prefix}gripper")
-            self._gripper_act[prefix] = gripper_actuator.id
-            gripper_joint = self.model.joint(f"{prefix}gripper")
-            self._gripper_qpos_adr[prefix] = gripper_joint.qposadr[0]
-            self._gripper_dof_adr[prefix] = gripper_joint.dofadr[0]
-            qpos_adrs = []
-            dof_adrs = []
-            act_ids = []
-
-            for name in ARM_JOINTS:
-                joint = self.model.joint(f"{prefix}{name}")
-                qpos_adrs.append(joint.qposadr[0])
-                dof_adrs.append(joint.dofadr[0])
-                actuator = self.model.actuator(f"{prefix}{name}")
-                act_ids.append(actuator.id)
-
-            self._arm_qpos_adr[prefix] = qpos_adrs
-            self._arm_dof_adr[prefix] = dof_adrs
-            self._arm_act_id[prefix] = act_ids
-
-        for name in self.camera_names:
-            self.model.camera(name)
-
-    def reset(self):
-        ...
-
+            gripper_act = self.model.actuator(f"{prefix}gripper").id
+            self.data.ctrl[gripper_act] = GRIPPER_OPEN
+        mujoco.mj_forward(self.model, self.data)
+        for _ in range(SETTLE_STEPS):
+            mujoco.mj_step(self.model, self.data)
+        self._step_count = 0
+        return {}, {}
+    
     def step(self, action):
-        ...
+        for _ in range(self.n_substeps):
+            mujoco.mj_step(self.model, self.data)
+        self._step_count += 1
+        return {}, 0.0, False, False, {}
 
-    def set_gripper(self, prefix, command):
-        ...
+def run_env_check():
+    env = ClothFoldingEnv()
+    env.reset(seed=0)
+    env.step(np.zeros(14))
+    print("testing")
 
 def build_cloth_xml(timestep):
     # flat cloth spawned already at rest on the table (no drop -> no bounce/jitter)
@@ -416,4 +393,4 @@ def main():
     print(f"max |qacc|: {_max_qacc:.1f}  (healthy: <1e3-ish; 1e5+ is no good)")
 
 if __name__ == "__main__":
-    main()
+    run_env_check()
