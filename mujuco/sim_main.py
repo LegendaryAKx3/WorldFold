@@ -44,12 +44,15 @@ SUCCESS_FOLD_SCORE   = 0.85
 CORNER_PLACED_DIST   = 0.03
 ANCHOR_SLACK         = 0.05
 QACC_LIMIT           = 1e5
+TASK_NAMES           = ["fold", "drop", "push", "drag"]   # index = task id (one-hot slot)
 
 class ClothFoldEnv(gym.Env):
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
 
-    def __init__(self, control_dt=0.05, max_episode_steps=200, action_scale_pos=0.03, action_scale_rot=0.1):
+    def __init__(self, control_dt=0.05, max_episode_steps=200, action_scale_pos=0.03, action_scale_rot=0.1,
+                 action_mode="ee_delta", observation_mode="state", image_size=(84, 84),
+                 camera_names=None, domain_randomization=False, n_cloth_samples=9, n_tasks=4):
         self.control_dt = control_dt
         self.max_episode_steps = max_episode_steps
         self.n_substeps = int(round(control_dt / ARM_TIMESTEP))   # 100
@@ -59,6 +62,46 @@ class ClothFoldEnv(gym.Env):
         self.prefixes = ["left_", "right_"]
 
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(14,), dtype=np.float32)
+
+        # behaviour only
+        self.action_mode = action_mode
+        self.domain_randomization = domain_randomization
+
+        # shape-deciding
+        self.observation_mode = observation_mode
+        self.image_size = image_size
+        self.camera_names = ["main"] if camera_names is None else camera_names
+        self.n_cloth_samples = n_cloth_samples   # K: interior mesh points summarizing cloth shape
+        self.n_tasks = n_tasks                   # number of task types (one-hot identifier)
+
+        # proprio (per arm): joint pos + joint vel + gripper + EE pose(7) + EE vel(6) + grasp(1)
+        per_arm = len(ARM_JOINTS) * 2 + 1 + 7 + 6 + 1
+        P = per_arm * len(self.prefixes)
+
+        # cloth_state: 4 corner pos + 4 corner vel + K sampled points + CoM + height stats + 4 corner-to-goal
+        C = (4 * 3) + (4 * 3) + (self.n_cloth_samples * 3) + 3 + 3 + (4 * 3)
+
+        # task: one-hot id + normalized stage(1) + goal keypoints(4x3) + per-corner progress(4) + time-left(1)
+        T = self.n_tasks + 1 + (4 * 3) + 4 + 1
+
+        # image (pixels/hybrid only): stacked RGB, one camera's 3 channels after another
+        H, W = self.image_size
+        img_shape = (H, W, 3 * len(self.camera_names))
+
+        self._use_image = self.observation_mode in ("pixels", "hybrid")
+        self._use_cloth = self.observation_mode in ("state", "hybrid")
+
+        spaces = {
+            "proprio": gym.spaces.Box(-np.inf, np.inf, shape=(P,), dtype=np.float32),
+            "task": gym.spaces.Box(-np.inf, np.inf, shape=(T,), dtype=np.float32),
+        }
+        if self._use_cloth:
+            spaces["cloth_state"] = gym.spaces.Box(-np.inf, np.inf, shape=(C,), dtype=np.float32)
+        if self._use_image:
+            spaces["image"] = gym.spaces.Box(0, 255, shape=img_shape, dtype=np.uint8)
+        self.observation_space = gym.spaces.Dict(spaces)
+        self._renderer = None   # lazily created on first image render
+
         self._step_count = 0
 
         self.action_scale_pos = action_scale_pos
@@ -99,6 +142,123 @@ class ClothFoldEnv(gym.Env):
             corner = self.model.body(corner_names[prefix])
             self._corner_body[prefix] = corner.id
 
+        # cloth vertices are bodies cloth_0 .. cloth_(N*N-1) (row-major grid)
+        n_vert = CLOTH_COUNT * CLOTH_COUNT
+        self._cloth_body_ids = [self.model.body(f"cloth_{i}").id for i in range(n_vert)]
+        corner_idx = [0, CLOTH_COUNT - 1, (CLOTH_COUNT - 1) * CLOTH_COUNT, n_vert - 1]
+        self._corner_ids = [self._cloth_body_ids[i] for i in corner_idx]
+        sample_idx = np.linspace(0, n_vert - 1, self.n_cloth_samples).astype(int)
+        self._sample_ids = [self._cloth_body_ids[i] for i in sample_idx]
+
+        # task/goal state (filled by reset)
+        self._task_id = 0
+        self._goal_corners = np.zeros((4, 3))
+        self._goal_scale = np.ones(4)
+        self._success_steps = 0
+        self._action_clipped = False
+
+    # ---- helpers ----
+    def _body_linvel(self, bid):
+        v = np.zeros(6)
+        mujoco.mj_objectVelocity(self.model, self.data, mujoco.mjtObj.mjOBJ_BODY, bid, v, 0)
+        return v[3:6]   # [angular(3), linear(3)] -> keep linear
+
+    def _corner_dists(self):
+        corners = self.data.xpos[self._corner_ids]
+        return np.linalg.norm(self._goal_corners - corners, axis=1)   # (4,)
+
+    def _corner_progress(self):
+        return (self._corner_dists() < CORNER_PLACED_DIST).astype(np.float32)   # (4,)
+
+    def _fold_score(self):
+        return float(np.clip(1.0 - self._corner_dists() / self._goal_scale, 0.0, 1.0).mean())
+
+    def _ik_ok(self, prefix):
+        site = self.data.site_xpos[self._site_id[prefix]]
+        return bool(np.linalg.norm(self._target_pos[prefix] - site) < 0.02)
+
+    def _failed(self):
+        allc = self.data.xpos[self._cloth_body_ids]
+        if np.any(np.abs(allc[:, :2]) > WORKSPACE_XY):
+            return True
+        if np.max(np.abs(self.data.qacc)) > QACC_LIMIT:
+            return True
+        return False
+
+    def _render_image(self):
+        # stacked RGB: each camera's (H,W,3) concatenated along the channel axis
+        if self._renderer is None:
+            H, W = self.image_size
+            self._renderer = mujoco.Renderer(self.model, height=H, width=W)
+        frames = []
+        for cam in self.camera_names:
+            self._renderer.update_scene(self.data, camera=cam)
+            frames.append(self._renderer.render())
+        return np.concatenate(frames, axis=2).astype(np.uint8)
+
+    def _get_obs(self):
+        # proprio (per arm): joint pos(5) + joint vel(5) + gripper(1) + EE pose(7) + EE vel(6) + grasp(1)
+        proprio = []
+        for p in self.prefixes:
+            proprio += [self.data.qpos[a] for a in self._arm_qpos_adr[p]]
+            proprio += [self.data.qvel[a] for a in self._arm_dof_adr[p]]
+            proprio.append(self.data.ctrl[self._gripper_act[p]])
+            sid = self._site_id[p]
+            proprio += list(self.data.site_xpos[sid])
+            q = np.zeros(4); mujoco.mju_mat2Quat(q, self.data.site_xmat[sid])
+            proprio += list(q)
+            v = np.zeros(6)
+            mujoco.mj_objectVelocity(self.model, self.data, mujoco.mjtObj.mjOBJ_SITE, sid, v, 0)
+            proprio += list(v)
+            proprio.append(float(self.data.eq_active[self._weld_id[p]]))
+        proprio = np.array(proprio, dtype=np.float32)
+
+        # task: one-hot(n_tasks) + stage(1) + goal keypoints(12) + progress(4) + time-left(1)
+        onehot = np.zeros(self.n_tasks, dtype=np.float32); onehot[self._task_id] = 1.0
+        stage = np.array([self._corner_progress().mean()], dtype=np.float32)
+        tleft = np.array([1.0 - self._step_count / self.max_episode_steps], dtype=np.float32)
+        task = np.concatenate([onehot, stage, self._goal_corners.ravel(),
+                               self._corner_progress(), tleft]).astype(np.float32)
+
+        obs = {"proprio": proprio, "task": task}
+
+        if self._use_cloth:
+            # cloth_state: 4 corner pos + 4 corner vel + K samples + CoM + height(min/max/mean z) + 4 corner-to-goal
+            xpos = self.data.xpos
+            corners = xpos[self._corner_ids]
+            cvel = np.array([self._body_linvel(b) for b in self._corner_ids])
+            samples = xpos[self._sample_ids]
+            allc = xpos[self._cloth_body_ids]
+            com = allc.mean(axis=0)
+            z = allc[:, 2]
+            height = np.array([z.min(), z.max(), z.mean()])
+            to_goal = self._goal_corners - corners
+            obs["cloth_state"] = np.concatenate([corners.ravel(), cvel.ravel(), samples.ravel(),
+                                                 com, height, to_goal.ravel()]).astype(np.float32)
+        if self._use_image:
+            obs["image"] = self._render_image()
+
+        return obs
+
+    def _step_info(self, terms, reason=None):
+        return {
+            "reward_terms": terms,
+            "success": self._success_steps >= HOLD_STEPS,
+            "fold_score": self._fold_score(),
+            "action_clipped": self._action_clipped,
+            "left_ik_success": self._ik_ok("left_"),
+            "right_ik_success": self._ik_ok("right_"),
+            "left_grasp_active": bool(self.data.eq_active[self._weld_id["left_"]]),
+            "right_grasp_active": bool(self.data.eq_active[self._weld_id["right_"]]),
+            "termination_reason": reason,
+        }
+
+    def _reward(self):
+        dist_term = -float(self._corner_dists().mean())
+        success_term = 10.0 if self._fold_score() >= SUCCESS_FOLD_SCORE else 0.0
+        terms = {"corner_dist": dist_term, "success_bonus": success_term}
+        return dist_term + success_term, terms
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         mujoco.mj_resetData(self.model, self.data)
@@ -116,8 +276,25 @@ class ClothFoldEnv(gym.Env):
             quat = np.zeros(4)
             mujoco.mju_mat2Quat(quat, self.data.site_xmat[site_id])
             self._target_quat[prefix] = quat
+
+        # sample task; goal = fold cloth onto itself (each corner -> its diagonal-opposite start pos)
+        opts = options or {}
+        self._task_id = int(opts.get("task", self.np_random.integers(self.n_tasks)))
+        corners0 = self.data.xpos[self._corner_ids].copy()
+        self._goal_corners = corners0[[3, 2, 1, 0]].copy()
+        self._goal_scale = np.maximum(np.linalg.norm(self._goal_corners - corners0, axis=1), 1e-6)
+        self._success_steps = 0
+        self._action_clipped = False
         self._step_count = 0
-        return {}, {}
+
+        info = {
+            "task_name": TASK_NAMES[self._task_id],
+            "episode_seed": seed,
+            "goal_keypoints": self._goal_corners.copy(),
+            "initial_cloth_keypoints": corners0,
+            "domain_parameters": {},
+        }
+        return self._get_obs(), info
     
     def update_ee_target(self, prefix, pos_delta, rot_delta):
         delta = np.asarray(pos_delta, dtype=float) * self.action_scale_pos
@@ -207,22 +384,34 @@ class ClothFoldEnv(gym.Env):
             self.data.eq_active[eqid] = 0
 
     def step(self, action):
-        raw = np.asarray(action, dtype=np.float32)
-        raw = raw.reshape(14)
+        raw = np.asarray(action, dtype=np.float32).reshape(14)
         clipped = np.clip(raw, -1.0, 1.0)
+        self._action_clipped = bool(np.any(raw != clipped))
 
         self.set_gripper("left_", float(clipped[6]))
         self.set_gripper("right_", float(clipped[13]))
 
         self.update_ee_target("left_", clipped[0:3], clipped[3:6])
         self.update_ee_target("right_", clipped[7:10], clipped[10:13])
-        for i in range(self.n_substeps):
+        for _ in range(self.n_substeps):
             self.ik_substep("left_")
             self.ik_substep("right_")
             mujoco.mj_step(self.model, self.data)
 
         self._step_count += 1
-        return {}, 0.0, False, False, {}
+        reward, terms = self._reward()
+
+        # terminated = held success OR unrecoverable failure; truncated = time limit
+        self._success_steps = self._success_steps + 1 if self._fold_score() >= SUCCESS_FOLD_SCORE else 0
+        reason = None
+        if self._success_steps >= HOLD_STEPS:
+            reason = "success"
+        elif self._failed():
+            reason = "cloth_out_of_bounds"
+        terminated = reason is not None
+        truncated = (not terminated) and self._step_count >= self.max_episode_steps
+
+        return self._get_obs(), reward, terminated, truncated, self._step_info(terms, reason)
 
 def run_env_check():
     env = ClothFoldEnv()
