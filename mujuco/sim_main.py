@@ -1,9 +1,7 @@
 import os
-import time
 import gymnasium as gym
 import so101_nexus
-import so101_nexus.mujoco
-import mujoco.viewer
+import mujoco
 import numpy as np
 import mjviser
 
@@ -14,8 +12,6 @@ CLOTH_RADIUS          = 0.01    # collision thickness (physics only); MUST be >0
 VISUAL_THICKNESS      = 0.003   # how thick the cloth LOOKS (render only), decoupled from collision radius
 CLOTH_MASS            = 0.05    # level3 value; stability comes from soft finger pads + heavy damping
 CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2   # cloth spans +-0.09m
-HOVER_Z               = TABLE_TOP_Z + 0.10
-GRAB_Z                = TABLE_TOP_Z + 0.006   # fingertip presses onto the cloth; safe now that finger pads are soft. tune +-2mm
 
 # SO101 arm model
 ARM_XML_PATH          = os.path.join(os.path.dirname(so101_nexus.__file__), "assets", "SO101", "so101_new_calib.xml")
@@ -27,7 +23,6 @@ ARM_TIMESTEP         = 0.0005     # contact-heavy grasp needs 0.5ms; 1ms explode
 MAX_STEP_MOVE        = 0.0003    # max amount can move per step
 MAX_JOINT_STEP       = 0.005
 CLOTH_DAMPING        = 0.3        # viscous damping per cloth vertex DOF; calms jitter/explosions (level3 value)
-PULL_DIST            = 0.13       # how far each arm drags its corner outward (toward its base)
 
 # Cloth Fold params
 GRIPPER_OPEN         = 1.0      # gripper ctrlrange is [-0.175, 1.745]
@@ -42,7 +37,6 @@ WORKSPACE_Z_LOW      = TABLE_TOP_Z + 0.003
 WORKSPACE_Z_HIGH     = TABLE_TOP_Z + 0.35
 SUCCESS_FOLD_SCORE   = 0.85
 CORNER_PLACED_DIST   = 0.03
-ANCHOR_SLACK         = 0.05
 QACC_LIMIT           = 1e5
 TASK_NAMES           = ["fold", "drop", "push", "drag"]   # index = task id (one-hot slot)
 
@@ -150,6 +144,19 @@ class ClothFoldEnv(gym.Env):
         sample_idx = np.linspace(0, n_vert - 1, self.n_cloth_samples).astype(int)
         self._sample_ids = [self._cloth_body_ids[i] for i in sample_idx]
 
+        self._base_body_mass = self.model.body_mass.copy()
+        self._base_geom_friction = self.model.geom_friction.copy()
+        self._base_dof_damping = self.model.dof_damping.copy()
+        self._table_geom_id = self.model.geom("table").id
+        self._cloth_qpos_adr = []
+        self._cloth_dof_adr = []
+        for i in range(self.model.njnt):
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if name is None:
+                self._cloth_qpos_adr.append(self.model.jnt_qposadr[i])
+                self._cloth_dof_adr.append(self.model.jnt_dofadr[i])
+        self._domain_params = {}
+
         # task/goal state (filled by reset)
         self._task_id = 0
         self._goal_corners = np.zeros((4, 3))
@@ -174,6 +181,8 @@ class ClothFoldEnv(gym.Env):
         return float(np.clip(1.0 - self._corner_dists() / self._goal_scale, 0.0, 1.0).mean())
 
     def _ik_ok(self, prefix):
+        if self.action_mode == "joint_delta":
+            return True   # no IK in joint mode
         site = self.data.site_xpos[self._site_id[prefix]]
         return bool(np.linalg.norm(self._target_pos[prefix] - site) < 0.02)
 
@@ -259,14 +268,48 @@ class ClothFoldEnv(gym.Env):
         terms = {"corner_dist": dist_term, "success_bonus": success_term}
         return dist_term + success_term, terms
 
+    def shift_cloth(self, dx, dy):
+        for j in range(0, len(self._cloth_qpos_adr), 3):
+            self.data.qpos[self._cloth_qpos_adr[j]] += dx
+            self.data.qpos[self._cloth_qpos_adr[j + 1]] += dy
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        opts = options or {}
+
+        randomize = bool(opts.get("randomization", self.domain_randomization))
+        self.model.body_mass[:] = self._base_body_mass
+        self.model.geom_friction[:] = self._base_geom_friction
+        self.model.dof_damping[:] = self._base_dof_damping
+        self._domain_params = {}
+        if randomize:
+            mass_scale = float(self.np_random.uniform(0.7, 1.3))
+            friction_scale = float(self.np_random.uniform(0.7, 1.3))
+            damping_scale = float(self.np_random.uniform(0.7, 1.3))
+            for bid in self._cloth_body_ids:
+                self.model.body_mass[bid] *= mass_scale
+            self.model.geom_friction[self._table_geom_id] *= friction_scale
+            for adr in self._cloth_dof_adr:
+                self.model.dof_damping[adr] *= damping_scale
+            self._domain_params = {"cloth_mass_scale": mass_scale,
+                                   "table_friction_scale": friction_scale,
+                                   "cloth_damping_scale": damping_scale}
+
         mujoco.mj_resetData(self.model, self.data)
         for prefix in self.prefixes:
             gripper_act = self.model.actuator(f"{prefix}gripper").id
             self.data.ctrl[gripper_act] = GRIPPER_OPEN
             self.data.eq_active[self._weld_id[prefix]] = 0
             self._gripper_closed[prefix] = False
+
+        if "cloth_pose" in opts:
+            pose = np.asarray(opts["cloth_pose"], dtype=float).ravel()
+            self.shift_cloth(float(pose[0]), float(pose[1]))
+        elif randomize:
+            offset = self.np_random.uniform(-0.03, 0.03, size=2)
+            self.shift_cloth(float(offset[0]), float(offset[1]))
+            self._domain_params["cloth_offset_xy"] = [float(offset[0]), float(offset[1])]
+
         mujoco.mj_forward(self.model, self.data)
         for _ in range(SETTLE_STEPS):
             mujoco.mj_step(self.model, self.data)
@@ -277,11 +320,14 @@ class ClothFoldEnv(gym.Env):
             mujoco.mju_mat2Quat(quat, self.data.site_xmat[site_id])
             self._target_quat[prefix] = quat
 
-        # sample task; goal = fold cloth onto itself (each corner -> its diagonal-opposite start pos)
-        opts = options or {}
+        # sample task, then derive its goal keypoints (goal_pose option overrides)
         self._task_id = int(opts.get("task", self.np_random.integers(self.n_tasks)))
         corners0 = self.data.xpos[self._corner_ids].copy()
-        self._goal_corners = corners0[[3, 2, 1, 0]].copy()
+        if "goal_pose" in opts:
+            self._goal_corners = np.asarray(opts["goal_pose"], dtype=float).reshape(4, 3).copy()
+        else:
+            # goal = fold cloth onto itself (each corner -> its diagonal-opposite start pos)
+            self._goal_corners = corners0[[3, 2, 1, 0]].copy()
         self._goal_scale = np.maximum(np.linalg.norm(self._goal_corners - corners0, axis=1), 1e-6)
         self._success_steps = 0
         self._action_clipped = False
@@ -292,7 +338,7 @@ class ClothFoldEnv(gym.Env):
             "episode_seed": seed,
             "goal_keypoints": self._goal_corners.copy(),
             "initial_cloth_keypoints": corners0,
-            "domain_parameters": {},
+            "domain_parameters": dict(self._domain_params),
         }
         return self._get_obs(), info
     
@@ -383,6 +429,19 @@ class ClothFoldEnv(gym.Env):
             self.data.ctrl[act_id] = GRIPPER_OPEN
             self.data.eq_active[eqid] = 0
 
+    def apply_joint_delta(self, prefix, deltas):
+        for k in range(len(ARM_JOINTS)):
+            act_id = self._arm_act_id[prefix][k]
+            qpos_adr = self._arm_qpos_adr[prefix][k]
+            new_target = self.data.qpos[qpos_adr] + float(deltas[k]) * JOINT_DELTA_SCALE
+            low = self.model.actuator_ctrlrange[act_id][0]
+            high = self.model.actuator_ctrlrange[act_id][1]
+            if new_target < low:
+                new_target = low
+            if new_target > high:
+                new_target = high
+            self.data.ctrl[act_id] = new_target
+
     def step(self, action):
         raw = np.asarray(action, dtype=np.float32).reshape(14)
         clipped = np.clip(raw, -1.0, 1.0)
@@ -391,12 +450,18 @@ class ClothFoldEnv(gym.Env):
         self.set_gripper("left_", float(clipped[6]))
         self.set_gripper("right_", float(clipped[13]))
 
-        self.update_ee_target("left_", clipped[0:3], clipped[3:6])
-        self.update_ee_target("right_", clipped[7:10], clipped[10:13])
-        for _ in range(self.n_substeps):
-            self.ik_substep("left_")
-            self.ik_substep("right_")
-            mujoco.mj_step(self.model, self.data)
+        if self.action_mode == "joint_delta":
+            self.apply_joint_delta("left_", clipped[0:5])
+            self.apply_joint_delta("right_", clipped[7:12])
+            for _ in range(self.n_substeps):
+                mujoco.mj_step(self.model, self.data)
+        else:
+            self.update_ee_target("left_", clipped[0:3], clipped[3:6])
+            self.update_ee_target("right_", clipped[7:10], clipped[10:13])
+            for _ in range(self.n_substeps):
+                self.ik_substep("left_")
+                self.ik_substep("right_")
+                mujoco.mj_step(self.model, self.data)
 
         self._step_count += 1
         reward, terms = self._reward()
@@ -413,17 +478,72 @@ class ClothFoldEnv(gym.Env):
 
         return self._get_obs(), reward, terminated, truncated, self._step_info(terms, reason)
 
-def run_env_check():
-    env = ClothFoldEnv()
-    env.reset(seed=0)
-    site_id = env._site_id["left_"]
-    print("start z:", env.data.site_xpos[site_id][2])
-    action = np.zeros(14)
-    action[2] = -1.0   # push left EE down
-    for i in range(10):
-        env.step(action)
-    print("end z:  ", env.data.site_xpos[site_id][2])
-    print("milestone 2: z should have dropped ~0.1m")
+class StateOnlyWrapper(gym.ObservationWrapper):
+
+    KEYS = ("proprio", "cloth_state", "task") # flat state vector for sb3, fixed key order is needed
+
+    def __init__(self, env):
+        super().__init__(env)
+        dim = 0
+        for k in self.KEYS:
+            dim += env.observation_space[k].shape[0]
+        self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(dim,), dtype=np.float32)
+
+    def observation(self, obs):
+        parts = []
+        for k in self.KEYS:
+            parts.append(obs[k])
+        return np.concatenate(parts).astype(np.float32)
+
+def train_sb3(use_state_wrapper=False, total_timesteps=100_000):
+    from stable_baselines3 import PPO
+    if use_state_wrapper:
+        env = StateOnlyWrapper(ClothFoldEnv(observation_mode="state"))
+        model = PPO("MlpPolicy", env, verbose=1)
+    else:
+        env = ClothFoldEnv(observation_mode="hybrid")
+        model = PPO("MultiInputPolicy", env, verbose=1)
+    model.learn(total_timesteps)
+    return model
+
+def dreamer_transition(obs, action, reward, terminated, truncated, is_first, gamma=0.99):
+    return {
+        "image": obs["image"],
+        "proprio": obs["proprio"], # proprioception
+        "action": np.asarray(action, dtype=np.float32),
+        "reward": np.float32(reward),
+        "is_first": is_first,
+        "is_last": terminated or truncated,
+        "is_terminal": terminated,
+        "discount": np.float32(0.0 if terminated else gamma),
+    }
+
+def collect_episode(env, policy_fn, gamma=0.99):
+    episode = []
+    obs, info = env.reset()
+    zero_action = np.zeros(env.action_space.shape, dtype=np.float32)
+    episode.append(dreamer_transition(obs, zero_action, 0.0, False, False, True, gamma))
+    while True:
+        action = policy_fn(obs)
+        obs, reward, terminated, truncated, info = env.step(action)
+        episode.append(dreamer_transition(obs, action, reward, terminated, truncated, False, gamma))
+        if terminated or truncated:
+            return episode
+
+# verification before running
+def check_contract(env, n_episodes=4, n_steps=5):
+    ref = None
+    for ep in range(n_episodes):
+        obs, info = env.reset(options={"task": ep % env.n_tasks})
+        for _ in range(n_steps):
+            sig = {}
+            for k in sorted(obs.keys()):
+                sig[k] = (obs[k].shape, str(obs[k].dtype))
+            if ref is None:
+                ref = sig
+            assert sig == ref, f"contract drift: {sig} != {ref}"
+            obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+    print("contract ok:", ref)
 
 def build_cloth_xml(timestep):
     # flat cloth spawned already at rest on the table (no drop -> no bounce/jitter)
@@ -500,6 +620,18 @@ def compile_model(timestep):
         if name is None:
             model.dof_damping[model.jnt_dofadr[i]] = CLOTH_DAMPING
 
+    # left = blue, right = yellow 
+    # this is js so that its easier for ppl to tell which arm is which
+    arm_rgba = {"left_": [0.25, 0.45, 0.95, 1.0], "right_": [0.95, 0.75, 0.15, 1.0]}
+    for g in range(model.ngeom):
+        body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[g])
+        if body_name is None:
+            continue
+        for prefix, rgba in arm_rgba.items():
+            if body_name.startswith(prefix):
+                model.geom_matid[g] = -1   # drop the mesh material so the flat colour shows
+                model.geom_rgba[g] = rgba
+
     # each arm's finger pads ship as 1.25mm boxes with very stiff contact params,
     # which explode the ~1-gram cloth vertices on touch. soften and enlarge them
     # for BOTH arms (names are left_/right_ prefixed). this is the real fix for
@@ -549,8 +681,6 @@ def make_render_fn(model, data):
         scene.camera_tracking_enabled = False
         scene.update_from_mjdata(data)
         vertices = np.array(data.flexvert_xpos)
-        if scene.camera_tracking_enabled and scene._tracked_body_id is not None:
-            vertices = vertices - data.xpos[scene._tracked_body_id]
         # visual slab, decoupled from the physics radius: a vertex center rests
         # ~CLOTH_RADIUS above the table, so drop to the cloth's actual bottom surface
         # (center - radius, ~table level) and build a thin VISUAL_THICKNESS slab up
@@ -574,17 +704,35 @@ def test_idk(env):
     for prefix in env.prefixes:
         site = env.data.site_xpos[env._site_id[prefix]]
         weld_active = env.data.eq_active[env._weld_id[prefix]]
+        corner = env.data.xpos[env._corner_body[prefix]]
+        q = np.zeros(4)
+        mujoco.mju_mat2Quat(q, env.data.site_xmat[env._site_id[prefix]])
+        env._target_quat[prefix] = q
+        anchors = getattr(env, "_demo_anchor", None)
+        if anchors is None:
+            anchors = {}
+            env._demo_anchor = anchors
         if weld_active:
-            target = np.array([0.0, 0.0, TABLE_TOP_Z + 0.10])
+            if prefix not in anchors:
+                anchors[prefix] = np.array([site[0], site[1]])
+            target = np.array([anchors[prefix][0], anchors[prefix][1], TABLE_TOP_Z + 0.10])
+            grip = -1.0
         else:
-            target = env.data.xpos[env._corner_body[prefix]]
+            anchors.pop(prefix, None)
+            horiz = float(np.linalg.norm((site - corner)[:2]))
+            if horiz > 0.02:
+                target = corner + np.array([0.0, 0.0, 0.06])
+                grip = 1.0
+            else:
+                target = corner
+                grip = -1.0
         direction = target - site
         cmd = np.clip(direction * 20.0, -1.0, 1.0)
         start = pos_slice[prefix]
         action[start] = cmd[0]
         action[start + 1] = cmd[1]
         action[start + 2] = cmd[2]
-        action[grip_index[prefix]] = -1.0
+        action[grip_index[prefix]] = grip
     return action
 
 def main():
