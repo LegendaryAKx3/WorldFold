@@ -186,16 +186,6 @@ def compute_relative_angles(normals, ref_index):
         angles[i] = np.degrees(np.arccos(dot))
     return angles
 
-_max_qacc = 0.0
-
-def tracked_step(model, data):
-    global _max_qacc
-    mujoco.mj_step(model, data)
-
-    step_qacc = float(np.max(np.abs(data.qacc)))
-    if step_qacc > _max_qacc:
-        _max_qacc = step_qacc
-
 def ik_step(model, data, target, tol=0.008):
     site_id = model.site("gripperframe").id
     error = np.asarray(target, dtype=float) - data.site_xpos[site_id]
@@ -289,7 +279,7 @@ def make_step_fn(model, data, task):
                 else:
                     print("FAIL: cloth barely moved")
 
-        tracked_step(model, data)
+        mujoco.mj_step(model, data)
 
     def reset_fn(model, data):
         # called by the viewer's Reset button
@@ -403,7 +393,7 @@ def make_render_fn(model, data):
 def run_drop():
     model = compile_model(0.001, task="drop")
     data = mujoco.MjData(model)
-    mjviser.Viewer(model, data, step_fn=tracked_step, render_fn=make_render_fn(model, data)).run()
+    mjviser.Viewer(model, data, render_fn=make_render_fn(model, data)).run()
 
 def run_arm_task(task):
     model = compile_model(ARM_TIMESTEP, task=task)
