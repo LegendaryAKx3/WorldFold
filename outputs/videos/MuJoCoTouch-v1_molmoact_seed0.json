@@ -1,0 +1,27 @@
+{
+  "env": "MuJoCoTouch-v1",
+  "policy": "molmoact",
+  "repo_id": "allenai/MolmoAct2-SO100_101",
+  "seed": 0,
+  "task": "Touch the red cube.",
+  "steps": 100,
+  "reward": 26.694,
+  "success": false,
+  "final_info": {
+    "tcp_to_obj_dist": 0.1899516638975446,
+    "success": false,
+    "privileged_state": [
+      0.04021564871072769,
+      -0.08591610193252563,
+      0.6198735237121582,
+      1.1710525751113892,
+      0.6239970922470093,
+      0.4217436611652374
+    ],
+    "energy_norm": 1.6975121816239198,
+    "action_delta_norm": 0.005145468055492713
+  },
+  "video": "outputs/videos/MuJoCoTouch-v1_molmoact_seed0.mp4",
+  "chunk_size": 8,
+  "mean_model_call_time_s": 45.42
+}
