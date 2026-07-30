@@ -1,0 +1,37 @@
+# Minimal cloth-angle RSSM world model config.
+# Grid resolution, action dim, angle unit/convention are dataset properties
+# and must match the EpisodeStore the data was collected with.
+
+data:
+  episode_dir: outputs/cloth_angles/episodes
+  grid_size: 11            # matches ClothFoldEnv's CLOTH_COUNT (mujuco/sim_main.py)
+  action_dim: 14           # matches ClothFoldEnv's 14-dim bimanual action space
+  angle_unit: radians
+  angle_convention: signed # "signed" in [-pi, pi], or "unsigned" in [0, pi]
+  seq_len: 16
+  held_out_fraction: 0.2   # split by episode, not by transition
+
+model:
+  encoder_hidden: [128, 64]
+  h_dim: 128
+  n_categoricals: 8
+  n_classes: 8
+  mlp_hidden: 128
+  kl_free_bits: 1.0
+  kl_weight: 1.0
+  huber_delta: 1.0
+
+train:
+  batch_size: 32
+  seq_len: 16
+  learning_rate: 3.0e-4
+  grad_clip: 100.0
+  train_steps: 10000
+  eval_every: 500
+  mixed_precision: false   # enable only once the float32 baseline is stable
+  seed: 0
+  checkpoint_dir: outputs/cloth_angles/checkpoints
+
+eval:
+  open_loop_horizons: [5, 10]
+  n_eval_sequences: 32
