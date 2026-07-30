@@ -6,3 +6,5 @@ numpy==2.5.1
 imageio==2.37.3
 stable-baselines3
 tensorboard
+imageio
+imageio-ffmpeg

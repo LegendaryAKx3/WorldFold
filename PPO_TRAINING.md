@@ -91,3 +91,36 @@ signal: the policy has learned a strategy that occasionally reaches the
 object quickly, but is inconsistent — most rollouts still run out the full
 episode without touching the target.
 
+## Rollout Videos
+
+`scripts/record_rollout.py` renders a single rollout (same env-stepping loop
+as `run_policy.py`) to an mp4, using `env.render(mode="rgb_array")` per step
+and `imageio` to encode the frames:
+
+```bash
+python scripts/record_rollout.py --env MuJoCoTouch-v1 --policy random \
+    --seed 0 --max-steps 200
+
+python scripts/record_rollout.py --env MuJoCoTouch-v1 --policy ppo \
+    --checkpoint outputs/ppo/MuJoCoTouch-v1/model.zip --seed 3 --max-steps 512 \
+    --output outputs/videos/MuJoCoTouch-v1_ppo_success.mp4
+
+python scripts/record_rollout.py --env MuJoCoTouch-v1 --policy ppo \
+    --checkpoint outputs/ppo/MuJoCoTouch-v1/model.zip --seed 0 --max-steps 512 \
+    --output outputs/videos/MuJoCoTouch-v1_ppo_typical.mp4
+```
+
+Recorded (matches the eval numbers above exactly, same seeds):
+
+| video | policy | seed | steps | reward | success |
+|---|---|---|---|---|---|
+| `outputs/videos/MuJoCoTouch-v1_random.mp4` | random | 0 | 200 | 44.16 | False |
+| `outputs/videos/MuJoCoTouch-v1_ppo_success.mp4` | ppo (100k ckpt) | 3 | 18 | 9.22 | True |
+| `outputs/videos/MuJoCoTouch-v1_ppo_typical.mp4` | ppo (100k ckpt) | 0 | 512 | 274.85 | False |
+
+`ppo_success` shows the policy reaching the target almost immediately;
+`ppo_typical` shows the more common outcome, where the arm moves purposefully
+but doesn't reach the touch margin within the episode budget. These files
+are gitignored (`outputs/`) since they're generated artifacts — rerun the
+commands above to regenerate them.
+
