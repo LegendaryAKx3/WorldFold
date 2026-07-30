@@ -14,6 +14,8 @@ import mujoco.viewer
 import numpy as np
 import mjviser
 
+# hi
+
 TABLE_TOP_Z           = 0.42
 CLOTH_COUNT           = 11      # grid resolution; higher = finer/drapier mesh
 CLOTH_SPACING         = 0.03    # vertex gap; chosen with COUNT to keep span = (COUNT-1)*spacing = 0.30m
