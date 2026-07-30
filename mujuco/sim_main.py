@@ -668,6 +668,27 @@ def compile_model(timestep):
 
     return model
 
+def surface_normal_angles(model, data):
+    faces = np.array(model.flex_elem).reshape(-1, 3)
+    verts = np.array(data.flexvert_xpos)
+    angles = {}
+    for i in range(len(faces)):
+        a = verts[faces[i][0]]
+        b = verts[faces[i][1]]
+        c = verts[faces[i][2]]
+        normal = np.cross(b - a, c - a)
+        length = np.linalg.norm(normal)
+        if length < 1e-12:
+            angles[i] = 0.0   
+            continue
+        cos_up = normal[2] / length
+        if cos_up > 1.0:
+            cos_up = 1.0
+        if cos_up < -1.0:
+            cos_up = -1.0
+        angles[i] = float(np.degrees(np.arccos(cos_up)))
+    return angles
+
 def make_render_fn(model, data):
     # mjviser skips flex objects, so push the cloth to the browser as a triangle mesh.
     # build ONE closed slab: top surface + bottom surface + side walls, so it reads
