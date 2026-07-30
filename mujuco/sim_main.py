@@ -534,7 +534,7 @@ def collect_episode(env, policy_fn, gamma=0.99):
 def check_contract(env, n_episodes=4, n_steps=5):
     ref = None
     for ep in range(n_episodes):
-        obs, info = env.reset(options={"task": ep % env.n_tasks})
+        obs, info = env.reset(options={"task": ep % env.n_tasks}) # herllo
         for _ in range(n_steps):
             sig = {}
             for k in sorted(obs.keys()):
