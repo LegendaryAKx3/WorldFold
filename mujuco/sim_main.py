@@ -740,6 +740,9 @@ def main():
     env.reset(seed=0)
     state = {"i": 0}
 
+    base_render = make_render_fn(env.model, env.data)
+    cam = {"renderer": None, "handle": None}
+
     def step_fn(model, data):
         if state["i"] % env.n_substeps == 0:
             action = test_idk(env)
@@ -757,7 +760,16 @@ def main():
         env.reset(seed=0)
         state["i"] = 0
 
-    mjviser.Viewer(env.model, env.data, step_fn=step_fn, reset_fn=reset_fn, render_fn=make_render_fn(env.model, env.data)).run()
+    def render_fn(scene):
+        base_render(scene)
+        if cam["renderer"] is None:
+            cam["renderer"] = mujoco.Renderer(env.model, height=240, width=320)
+            cam["handle"] = scene.server.gui.add_image(
+                np.zeros((240, 320, 3), dtype=np.uint8), label="main camera")
+        cam["renderer"].update_scene(env.data, camera="main")
+        cam["handle"].image = cam["renderer"].render()
+
+    mjviser.Viewer(env.model, env.data, step_fn=step_fn, reset_fn=reset_fn, render_fn=render_fn).run()
 
 if __name__ == "__main__":
     main()
