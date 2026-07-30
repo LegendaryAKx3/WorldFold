@@ -40,6 +40,11 @@ CORNER_PLACED_DIST   = 0.03
 QACC_LIMIT           = 1e5
 TASK_NAMES           = ["fold", "drop", "push", "drag"]   # index = task id (one-hot slot)
 
+# for repositioning the cam
+# CAMERA_POS           = (1, 5, 1)
+CAMERA_POS           = (0.75, -0.75, 0.75)
+CAMERA_TARGET        = (0.0, 0.0, TABLE_TOP_Z)  # aim point 
+
 class ClothFoldEnv(gym.Env):
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
@@ -545,10 +550,27 @@ def check_contract(env, n_episodes=4, n_steps=5):
             obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
     print("contract ok:", ref)
 
+def camera_xyaxes(pos, target):
+    # look-at
+    forward = np.array(target, dtype=float) - np.array(pos, dtype=float)
+    forward_norm = np.linalg.norm(forward)
+    if forward_norm < 1e-9:
+        raise ValueError("CAMERA_POS and CAMERA_TARGET are the same point")
+    forward = forward / forward_norm
+    right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+    right_norm = np.linalg.norm(right)
+    if right_norm < 1e-9:
+        right = np.array([1.0, 0.0, 0.0])
+    else:
+        right = right / right_norm
+    up = np.cross(right, forward)
+    return f"{right[0]:.4f} {right[1]:.4f} {right[2]:.4f} {up[0]:.4f} {up[1]:.4f} {up[2]:.4f}"
+
 def build_cloth_xml(timestep):
     # flat cloth spawned already at rest on the table (no drop -> no bounce/jitter)
     spawn = f'pos="0 0 {TABLE_TOP_Z + CLOTH_RADIUS + 0.001}"'
     edge = '<edge equality="true" damping="0.2"/>'
+    cam_pos = f"{CAMERA_POS[0]} {CAMERA_POS[1]} {CAMERA_POS[2]}"
 
     xml = f"""
     <mujoco model="cloth_level4">
@@ -561,7 +583,7 @@ def build_cloth_xml(timestep):
         <geom name="table" type="box" size="0.30 0.30 {TABLE_TOP_Z / 2}"
                 pos="0 0 {TABLE_TOP_Z / 2}" friction="0.4 0.005 0.0001"
                 rgba="0.55 0.4 0.25 1"/>
-        <camera name="main" pos="0.75 -0.75 0.75" xyaxes="0.707 0.707 0 -0.19 0.19 0.96"/>
+        <camera name="main" pos="{cam_pos}" xyaxes="{camera_xyaxes(CAMERA_POS, CAMERA_TARGET)}"/> 
 
         <flexcomp name="cloth" type="grid" count="{CLOTH_COUNT} {CLOTH_COUNT} 1"
                     spacing="{CLOTH_SPACING} {CLOTH_SPACING} {CLOTH_SPACING}"
@@ -766,6 +788,16 @@ def main():
             cam["renderer"] = mujoco.Renderer(env.model, height=240, width=320)
             cam["handle"] = scene.server.gui.add_image(
                 np.zeros((240, 320, 3), dtype=np.uint8), label="main camera")
+            
+            # just setting up the cam
+            camid = env.model.camera("main").id
+            pos = env.data.cam_xpos[camid].copy()
+            R = env.data.cam_xmat[camid].reshape(3, 3)
+            flipped = np.ascontiguousarray(R @ np.diag([1.0, -1.0, -1.0]))
+            quat = np.zeros(4)
+            mujoco.mju_mat2Quat(quat, flipped.ravel())
+            fov = float(np.radians(env.model.cam_fovy[camid]))
+            scene.server.scene.add_camera_frustum("/main_camera", fov=fov, aspect=320 / 240, scale=0.12, color=(255, 180, 40), wxyz=quat, position=pos) # draws the cam into the actual scene (the actual cam is in the xml declaration above)
         cam["renderer"].update_scene(env.data, camera="main")
         cam["handle"].image = cam["renderer"].render()
 
