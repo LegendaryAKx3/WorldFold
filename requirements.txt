@@ -8,3 +8,6 @@ stable-baselines3
 tensorboard
 imageio
 imageio-ffmpeg
+torch
+pyyaml
+matplotlib

@@ -5,3 +5,6 @@ __pycache__/
 *.py[cod]
 outputs/molmoact_import/
 outputs/ppo/
+outputs/cloth_angles/*
+!outputs/cloth_angles/videos/
+!outputs/cloth_angles/videos/*
