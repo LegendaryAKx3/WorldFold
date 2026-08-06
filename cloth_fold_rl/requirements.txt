@@ -1,0 +1,24 @@
+# Exact versions the committed checkpoints were trained and verified against.
+#
+# These differ from the repo-root requirements.txt, which pins so101-nexus 0.4.8
+# and mujoco 3.10.0. The fold policy was trained on 0.5.1 / 3.11.0, and MuJoCo
+# minor versions can change contact-solver behaviour -- so installing the root
+# pins may not reproduce the 100% success rate. Use this file for cloth_fold_rl.
+#
+#   pip install -r cloth_fold_rl/requirements.txt
+
+so101-nexus==0.5.1
+mujoco==3.11.0
+gymnasium==1.3.0
+mjviser==0.0.14
+numpy==2.5.1
+
+# training
+stable-baselines3==2.9.0
+torch==2.13.0
+tensorboard==2.21.0
+
+# record_video.py
+imageio==2.37.4
+imageio-ffmpeg==0.6.0
+pillow==12.3.0

@@ -9,9 +9,13 @@ The trained weights are committed, so this works straight from a clone — no
 training required:
 
 ```bash
-pip install so101-nexus imageio mjviser stable-baselines3 torch
+pip install -r cloth_fold_rl/requirements.txt
 python -m cloth_fold_rl.run_trained
 ```
+
+Use `cloth_fold_rl/requirements.txt`, **not** the repo-root one — the root pins
+so101-nexus 0.4.8 / mujoco 3.10.0, but these checkpoints were trained on
+0.5.1 / 3.11.0, and MuJoCo minor versions can shift contact-solver behaviour.
 
 Opens the viewer at http://localhost:8080 running `outputs/cloth_fold_rl/run2/best.zip`
 (100% success). It folds a corner every episode and auto-resets with a new random
