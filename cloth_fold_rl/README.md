@@ -3,6 +3,30 @@
 Trains a PPO policy to fold one corner of the cloth in `ClothFoldEnv`, and runs
 it in the mjviser viewer with a live success readout.
 
+## Just run it
+
+The trained weights are committed, so this works straight from a clone — no
+training required:
+
+```bash
+pip install so101-nexus imageio mjviser stable-baselines3 torch
+python -m cloth_fold_rl.run_trained
+```
+
+Opens the viewer at http://localhost:8080 running `outputs/cloth_fold_rl/run2/best.zip`
+(100% success). It folds a corner every episode and auto-resets with a new random
+cloth offset each time. The sidebar shows live `fold_score`, distance to goal,
+and grasp state.
+
+Checkpoints in the repo:
+
+| file | what | success |
+|---|---|---|
+| `outputs/cloth_fold_rl/run2/best.zip` | **the model** — use this | 100% |
+| `outputs/cloth_fold_rl/bc.zip` | behavior-cloned, pre-RL | 83% |
+| `outputs/cloth_fold_rl/run2/latest.zip` | last fine-tune round (regressed) | 62% |
+| `outputs/cloth_fold_rl/run1/*` | PPO from scratch — kept as the negative result | 0% |
+
 Everything here is a **wrapper** around `mujuco/sim_main.py`. `ClothFoldEnv` is
 not modified, so `cloth_angles/` keeps collecting data against the stock env.
 

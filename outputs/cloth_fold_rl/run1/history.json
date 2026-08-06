@@ -1,0 +1,57 @@
+[
+  {
+    "round": 1,
+    "timesteps": 20480,
+    "wall_minutes": 10.147546256931188,
+    "eval": {
+      "success_rate": 0.0,
+      "mean_fold_score": 0.0008746646716444317,
+      "grasp_rate": 0.0,
+      "mean_reward": 1.0478790617894844
+    }
+  },
+  {
+    "round": 2,
+    "timesteps": 40960,
+    "wall_minutes": 10.101697295131938,
+    "eval": {
+      "success_rate": 0.0,
+      "mean_fold_score": 0.009458468543984133,
+      "grasp_rate": 0.25,
+      "mean_reward": 1.7504661902298047
+    }
+  },
+  {
+    "round": 3,
+    "timesteps": 61440,
+    "wall_minutes": 10.153987663898928,
+    "eval": {
+      "success_rate": 0.0,
+      "mean_fold_score": 0.1352083718341752,
+      "grasp_rate": 1.0,
+      "mean_reward": 4.207253645599415
+    }
+  },
+  {
+    "round": 4,
+    "timesteps": 81920,
+    "wall_minutes": 10.235069764583992,
+    "eval": {
+      "success_rate": 0.0,
+      "mean_fold_score": 0.1109416394374379,
+      "grasp_rate": 1.0,
+      "mean_reward": 4.037330494410297
+    }
+  },
+  {
+    "round": 5,
+    "timesteps": 102400,
+    "wall_minutes": 10.422792662497764,
+    "eval": {
+      "success_rate": 0.0,
+      "mean_fold_score": 0.10846888133267368,
+      "grasp_rate": 1.0,
+      "mean_reward": 3.9427410049352014
+    }
+  }
+]
