@@ -8,3 +8,8 @@ outputs/ppo/
 outputs/cloth_angles/*
 !outputs/cloth_angles/videos/
 !outputs/cloth_angles/videos/*
+# trained weights + demo dataset (~18M): regenerate with collect_demos -> bc -> train
+outputs/cloth_fold_rl/
+# smoke_test.py render proofs
+mujuco/simulations/proof/
+.DS_Store
