@@ -3,7 +3,7 @@
 ## Task
 
 Train a small PPO baseline using SO101-Nexus, for comparison against the
-imported MolmoAct2 policy and the random baseline (see `MOLMOACT_IMPORT.md`).
+imported MolmoAct2 policy and the random baseline (see `molmoact_import.md`).
 
 ## Environment Choice
 

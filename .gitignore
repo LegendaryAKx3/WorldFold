@@ -8,3 +8,4 @@ outputs/ppo/
 outputs/cloth_angles/*
 !outputs/cloth_angles/videos/
 !outputs/cloth_angles/videos/*
+MUJOCO_LOG.TXT
