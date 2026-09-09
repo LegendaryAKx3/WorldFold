@@ -72,16 +72,28 @@ def one_step_eval(model: WorldModel, replay: SequenceReplay, device, n_sequences
     is_first_t = torch.as_tensor(is_first, device=device)
 
     with torch.no_grad():
+        # Infer current states from observations up to t, then predict t+1
+        # using action_t and the prior only. Never encode the target here.
+        current_states = model.rssm.observe(model.encoder(obs_t), actions_t, is_first_t)
+        predictions = [
+            model.decoder(model.rssm.imagine_step(state, actions_t[:, t]).feature())
+            for t, state in enumerate(current_states)
+        ]
+        angle_hat = torch.stack(predictions, dim=1)
+        # Posterior reconstruction is a separate diagnostic, not prediction.
         output = model.loss(obs_t, actions_t, next_obs_t, mask_t, is_first_t)
 
     n = model.grid_size
     persistence_hat = persistence_predict(obs_t).reshape(*obs_t.shape[:-1], n, n)
     target = next_obs_t.reshape(*next_obs_t.shape[:-1], n, n)
+    prediction_err = angle_error(model, angle_hat, target)
+    prediction_mae = (prediction_err.mean(dim=(-2, -1)) * mask_t).sum() / mask_t.sum().clamp(min=1.0)
     persistence_err = angle_error(model, persistence_hat, target)
     persistence_mae = (persistence_err.mean(dim=(-2, -1)) * mask_t).sum() / mask_t.sum().clamp(min=1.0)
 
     return {
-        "rssm_mae_rad": float(output.mae_radians),
+        "rssm_mae_rad": float(prediction_mae),
+        "posterior_reconstruction_mae_rad": float(output.mae_radians),
         "persistence_mae_rad": float(persistence_mae),
     }
 

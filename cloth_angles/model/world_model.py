@@ -4,7 +4,7 @@ L = L_angle + beta * L_KL
 
 L_angle uses Huber loss on the wrapped residual for signed circular angles,
 or the ordinary difference for an unsigned angle-to-reference field. L_KL is
-the balanced (stop-gradient) KL between posterior and prior, with free bits.
+the KL between posterior and prior, with free bits.
 Every loss term is masked: padded episode tails (mask == 0) never contribute.
 """
 
@@ -69,12 +69,16 @@ class WorldModel(nn.Module):
               mask: torch.Tensor, is_first: torch.Tensor) -> LossOutput:
         """obs/next_obs: [batch, time, N*N] flattened angle fields.
         actions: [batch, time, action_dim]. mask/is_first: [batch, time].
+
+        Reconstruct next_obs_t from the posterior at t+1, after action_t.
+        The matching prior is trained by KL and used for prediction.
         """
         batch, time, n2 = obs.shape
         n = self.grid_size
 
         embeds = self.encoder(obs)
-        states = self.rssm.observe(embeds, actions, is_first)
+        next_embeds = self.encoder(next_obs)
+        states = self.rssm.observe_transitions(embeds, actions, next_embeds, is_first)
 
         h = torch.stack([s.h for s in states], dim=1)
         z = torch.stack([s.z for s in states], dim=1)

@@ -40,6 +40,16 @@ outputs/videos/      recorded rollouts
 
 ## Docs
 
+World-model training consumes each `action_t` before reconstructing `next_obs_t`.
+Evaluation reports prior-only next-state prediction MAE separately from posterior
+reconstruction MAE. Retrain world-model checkpoints produced before this timing
+fix: their decoder was trained against a target one timestep ahead of its latent.
+Existing PPO checkpoints are unaffected.
+
+Run the cloth-angle tests with `python -m pytest cloth_angles/tests` (install
+`pytest` in the development environment first).
+
 - [PPO baseline](docs/ppo_training.md)
+- [World model: benchmarks, analytic reward, imagination](docs/world_model.md)
 - [MolmoAct2 import](docs/molmoact_import.md)
 - [Adding a policy](policy_runner/NOTES.md)

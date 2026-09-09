@@ -120,13 +120,13 @@ def main():
                 f"loss={output.loss.item():.4f} "
                 f"angle={output.angle_loss.item():.4f} "
                 f"kl={output.kl_loss.item():.4f} "
-                f"mae_rad={output.mae_radians.item():.4f}"
+                f"posterior_reconstruction_mae_rad={output.mae_radians.item():.4f}"
             )
             if held_out_replay is not None:
                 with torch.no_grad():
                     held_out_batch = to_tensors(held_out_replay.sample(train_cfg["batch_size"]), device)
                     held_out_output = model.loss(*held_out_batch)
-                msg += f" | held_out_mae_rad={held_out_output.mae_radians.item():.4f}"
+                msg += f" | held_out_posterior_reconstruction_mae_rad={held_out_output.mae_radians.item():.4f}"
             print(msg)
 
             save_checkpoint(
