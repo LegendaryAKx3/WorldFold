@@ -1,12 +1,12 @@
 """Actor-critic trained on imagined rollouts of a state-space world model.
 
 Dreamer-style, without a latent: the world model is a ResidualStatePredictor
-over physical state, rewards and terminations come from FoldReward, and the
-actor is trained by backpropagating lambda-returns through the model's
-dynamics. The critic regresses to the same returns on detached states.
-Returns bootstrap from a slow EMA copy of the critic, and the value loss is
-computed in return-scaled units, both to keep the critic from feeding on
-its own estimates.
+over physical state, rewards, terminations and task stages come from
+FoldReward, and the actor is trained by backpropagating lambda-returns
+through the model's dynamics. The critic regresses to the same returns on
+detached states. Returns bootstrap from a slow EMA copy of the critic, and
+the value loss is computed in return-scaled units, both to keep the critic
+from feeding on its own estimates.
 """
 
 from __future__ import annotations
@@ -18,21 +18,38 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from cloth_angles.model.fold_reward import CTRL_INDEX, GRASP_INDEX, FoldReward, MOVING_CORNER, gripper_transition
+from cloth_angles.model.fold_reward import FoldReward, gripper_transition
+from cloth_angles.tasks import SINGLE, Task
 
 GRIPPER_CLOSED, GRIPPER_OPEN = -0.1, 1.0
 
 
-def policy_features(state: torch.Tensor, goal: torch.Tensor, state_mean: torch.Tensor,
-                    state_scale: torch.Tensor) -> torch.Tensor:
-    """Normalized state, the episode goal, and the moving corner's offset to it."""
-    corner = state[..., 3 * MOVING_CORNER:3 * MOVING_CORNER + 3]
-    goal = goal.expand(*state.shape[:-1], 3)
-    return torch.cat([(state - state_mean) / state_scale, goal, (corner - goal) * 10.0], -1)
+def policy_features(state, goal, state_mean, state_scale, task: Task = SINGLE, stage=None):
+    """Normalized state, the goal vector, each arm's carried-corner offset to its
+    goal in the current stage (zero for an idle arm), and a stage one-hot for
+    tasks with more than one stage. stage: long [...] matching state[..., 0]."""
+    lead = state.shape[:-1]
+    goal = goal.expand(*lead, task.goal_dim)
+    goals = goal.reshape(*lead, -1, 3)
+    if stage is None:
+        stage = torch.zeros(lead, dtype=torch.long, device=state.device)
+    offsets = []
+    for s, st in enumerate(task.stages):
+        per_arm = [torch.zeros(*lead, 3, device=state.device) for _ in task.arms]
+        for m in st.moves:
+            corner = torch.stack([state[..., 3 * c:3 * c + 3] for c in m.corners]).mean(0)
+            per_arm[m.arm] = (corner - goals[..., m.goal, :]) * 10.0
+        offsets.append(torch.cat(per_arm, -1))
+    offsets = torch.stack(offsets, -2).gather(-2, stage[..., None, None].expand(*lead, 1, 3 * len(task.arms))).squeeze(-2)
+    parts = [(state - state_mean) / state_scale, goal, offsets]
+    if len(task.stages) > 1:
+        parts.append(F.one_hot(stage, len(task.stages)).float())
+    return torch.cat(parts, -1)
 
 
-def feature_dim(state_dim: int) -> int:
-    return state_dim + 6
+def feature_dim(task: Task = SINGLE) -> int:
+    n_stages = len(task.stages)
+    return task.state_dim + task.goal_dim + 3 * len(task.arms) + (n_stages if n_stages > 1 else 0)
 
 
 class Actor(nn.Module):
@@ -81,7 +98,7 @@ def lambda_returns(rewards: torch.Tensor, values: torch.Tensor, continues: torch
 
 
 class ImaginationTrainer:
-    def __init__(self, world_model, actor: Actor, critic: Critic, horizon: int = 15,
+    def __init__(self, world_model, actor: Actor, critic: Critic, task: Task = SINGLE, horizon: int = 15,
                  gamma: float = 0.98, lam: float = 0.95, entropy_coef: float = 1e-4,
                  lr: float = 3e-4, target_tau: float = 0.02, soft_reward: bool = True,
                  ood_limit: float = 8.0, bc_coef: float = 0.0, ensemble=None,
@@ -91,7 +108,7 @@ class ImaginationTrainer:
         their mean prediction and subtracts disagreement_coef times the members'
         spread (in normalized state units) from every imagined reward.
         """
-        self.world_model = world_model
+        self.world_model, self.task = world_model, task
         self.ensemble = list(ensemble) if ensemble else [world_model]
         self.disagreement_coef = disagreement_coef
         for model in {id(m): m for m in self.ensemble + [world_model]}.values():
@@ -110,15 +127,15 @@ class ImaginationTrainer:
         self.ood_limit = ood_limit
         self.bc_coef = bc_coef
 
-    def features(self, state, goal):
-        return policy_features(state, goal, self.world_model.state_mean, self.world_model.state_scale)
+    def features(self, state, goal, stage=None):
+        return policy_features(state, goal, self.world_model.state_mean, self.world_model.state_scale, self.task, stage)
 
     def step(self, state, prev_state, action):
-        """Learned continuous dynamics, with the gripper and grasp set by the exact rule.
+        """Learned continuous dynamics, with each gripper and grasp set by the exact rule.
 
         The learned model never reproduces grasp and release (about one
         transition per episode, which the L1 loss treats as outliers), so
-        those two dimensions come from gripper_transition instead; the soft
+        those dimensions come from gripper_transition instead; the soft
         version keeps them differentiable for the actor.
         """
         predictions = torch.stack([m(state, prev_state, action) for m in self.ensemble])
@@ -126,42 +143,50 @@ class ImaginationTrainer:
         if len(self.ensemble) > 1:
             spread = (predictions / self.world_model.state_scale).std(0)
             self._disagreement.append(spread.pow(2).mean(-1).sqrt())
-        closed, grasp = gripper_transition(state, action, soft=self.soft_reward)
         mask = torch.zeros_like(nxt)
-        mask[..., CTRL_INDEX] = 1.0
-        mask[..., GRASP_INDEX] = 1.0
         replacement = torch.zeros_like(nxt)
-        replacement[..., CTRL_INDEX] = GRIPPER_OPEN + closed * (GRIPPER_CLOSED - GRIPPER_OPEN)
-        replacement[..., GRASP_INDEX] = grasp
+        for arm in self.task.arms:
+            closed, grasp = gripper_transition(state, action, arm, self.task.grasp_radius, soft=self.soft_reward)
+            mask[..., arm.ctrl_index] = 1.0
+            mask[..., arm.grasp_index] = 1.0
+            replacement[..., arm.ctrl_index] = GRIPPER_OPEN + closed * (GRIPPER_CLOSED - GRIPPER_OPEN)
+            replacement[..., arm.grasp_index] = grasp
         return nxt * (1.0 - mask) + replacement * mask
 
-    def imagine(self, state, prev_state, goal):
-        states, actions = [state], []
+    def imagine(self, state, prev_state, spec, rs):
+        """Roll the actor through the model, scoring each step with the reward machine."""
+        states, actions, rewards, terminated, stages = [state], [], [], [], [rs["stage"]]
         self._disagreement = []
         for _ in range(self.horizon):
-            action, entropy = self.actor.sample(self.features(state, goal))
+            action, entropy = self.actor.sample(self.features(state, spec.flat_goal, rs["stage"]))
             nxt = self.step(state, prev_state, action)
+            reward, term, rs = spec.step(state, nxt, action, rs)
             prev_state, state = state, nxt
             states.append(state)
             actions.append(action)
-        return torch.stack(states, 1), torch.stack(actions, 1), entropy
+            rewards.append(reward)
+            terminated.append(term)
+            stages.append(rs["stage"])
+        return (torch.stack(states, 1), torch.stack(actions, 1), torch.stack(rewards, 1),
+                torch.stack(terminated, 1), torch.stack(stages, 1), entropy)
 
-    def update(self, state, prev_state, goal, anchors0, data_action=None, anchor=None) -> dict:
+    def update(self, state, prev_state, goal, anchors0, stage=None, anchor=None) -> dict:
         """One actor and one critic update from a batch of real start states.
 
+        stage: long [B], the task stage at each start state (default 0).
         Imagined steps whose normalized features leave [-ood_limit, ood_limit]
         are treated as terminal with zero value, so the actor cannot profit
-        from states the model was never trained on. With bc_coef > 0 the
-        actor is also pulled toward data_action on the real start states, or,
-        if anchor=(states, goals, actions) is given, toward those actions on
-        those states instead.
+        from states the model was never trained on. With bc_coef > 0 and
+        anchor=(states, goals, stages, actions), the actor is also pulled
+        toward those actions on those states.
         """
-        spec = FoldReward(goal, anchors0, soft=self.soft_reward)
-        states, actions, entropy = self.imagine(state, prev_state, goal)
-        rewards, terminated = spec.rollout(states, actions)
+        spec = FoldReward(goal, anchors0, self.task, soft=self.soft_reward)
+        spec.flat_goal = goal
+        rs = spec.init(torch.zeros(len(state), dtype=torch.long) if stage is None else stage)
+        states, actions, rewards, terminated, stages, entropy = self.imagine(state, prev_state, spec, rs)
         disagreement = torch.stack(self._disagreement, 1) if self._disagreement else torch.zeros_like(rewards)
         rewards = rewards - self.disagreement_coef * disagreement
-        features = self.features(states, goal[:, None])
+        features = self.features(states, goal[:, None], stages)
         out_of_distribution = features[:, 1:].detach().abs().amax(-1) > self.ood_limit
         terminated = terminated | out_of_distribution
         continues = 1.0 - terminated.float()
@@ -174,11 +199,9 @@ class ImaginationTrainer:
             self.return_scale = 0.99 * self.return_scale + 0.01 * max(1.0, spread.item())
         actor_loss = -(alive * returns).sum() / alive.sum() / self.return_scale - self.entropy_coef * entropy
         if self.bc_coef > 0 and anchor is not None:
-            anchor_state, anchor_goal, anchor_action = anchor
+            anchor_state, anchor_goal, anchor_stage, anchor_action = anchor
             actor_loss = actor_loss + self.bc_coef * F.mse_loss(
-                self.actor(self.features(anchor_state, anchor_goal)), anchor_action)
-        elif self.bc_coef > 0 and data_action is not None:
-            actor_loss = actor_loss + self.bc_coef * F.mse_loss(self.actor(features[:, 0].detach()), data_action)
+                self.actor(self.features(anchor_state, anchor_goal, anchor_stage)), anchor_action)
         self.actor_opt.zero_grad(set_to_none=True)
         self.critic_opt.zero_grad(set_to_none=True)
         actor_loss.backward()
@@ -196,10 +219,12 @@ class ImaginationTrainer:
             for p, tp in zip(self.critic.parameters(), self.target_critic.parameters()):
                 tp.lerp_(p, self.target_tau)
 
+        grasp = torch.stack([spec.grasped(states[:, -1], a) for a in self.task.arms], -1).any(-1)
         return {"actor_loss": actor_loss.item(), "critic_loss": critic_loss.item(),
                 "mean_return": returns[:, 0].mean().item(), "mean_reward": rewards.mean().item(),
-                "imagined_grasp_rate": spec.grasped(states[:, -1]).float().mean().item(),
+                "imagined_grasp_rate": grasp.float().mean().item(),
                 "imagined_success_rate": (terminated & (rewards > 10)).any(1).float().mean().item(),
+                "imagined_stage_advance": (stages[:, -1] > stages[:, 0]).float().mean().item(),
                 "max_feature": features.detach().abs().max().item(),
                 "ood_rate": out_of_distribution.any(1).float().mean().item(),
                 "disagreement": disagreement.mean().item(),

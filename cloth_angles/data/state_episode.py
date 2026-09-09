@@ -3,12 +3,13 @@
 An episode stores T+1 observed states and the T actions between them:
 
     vertices[t]  float32[T+1, N*N, 3]  cloth vertex world positions
-    robot[t]     float32[T+1, R]       left arm: joint pos(5), joint vel(5),
+    robot[t]     float32[T+1, 15*arms] per arm: joint pos(5), joint vel(5),
                                        gripper ctrl(1), end-effector pos(3),
                                        grasp weld active(1)
     actions[t]   float32[T, A]         action taken between state t and t+1
     rewards[t]   float32[T]            environment reward for that transition (optional)
     terminated[t] bool[T]              environment terminated after it (optional)
+    stage[t]     int64[T+1]            task stage the env was in at state t (optional)
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ class StateEpisode:
     metadata: dict = field(default_factory=dict)
     rewards: np.ndarray | None = None
     terminated: np.ndarray | None = None
+    stage: np.ndarray | None = None
 
     def __len__(self) -> int:
         """Number of transitions."""
@@ -42,8 +44,8 @@ class StateEpisode:
             raise ValueError("vertices and robot must hold one more state than there are actions")
         if self.vertices.ndim != 3 or self.vertices.shape[2] != 3:
             raise ValueError(f"vertices must be [T+1, N*N, 3], got {self.vertices.shape}")
-        if self.robot.shape[1] != ROBOT_DIM:
-            raise ValueError(f"robot must be [T+1, {ROBOT_DIM}], got {self.robot.shape}")
+        if self.robot.shape[1] % ROBOT_DIM != 0:
+            raise ValueError(f"robot must be [T+1, k*{ROBOT_DIM}], got {self.robot.shape}")
         for name in ("vertices", "robot", "actions"):
             if getattr(self, name).dtype != np.float32:
                 raise ValueError(f"{name} must be float32")
@@ -51,9 +53,11 @@ class StateEpisode:
             raise ValueError("rewards must be float32[T]")
         if self.terminated is not None and (self.terminated.shape != (t,) or self.terminated.dtype != np.bool_):
             raise ValueError("terminated must be bool[T]")
+        if self.stage is not None and self.stage.shape != (t + 1,):
+            raise ValueError("stage must be int[T+1]")
 
     def states(self) -> np.ndarray:
-        """float32[T+1, N*N*3 + R]: flattened vertices followed by robot state."""
+        """float32[T+1, N*N*3 + 15*arms]: flattened vertices followed by robot state."""
         return np.concatenate([self.vertices.reshape(len(self) + 1, -1), self.robot], axis=1)
 
 
@@ -67,7 +71,8 @@ class StateEpisodeStore:
         existing = sorted(self.root.glob("episode_*.npz"))
         index = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
         path = self.root / f"episode_{index:06d}.npz"
-        extra = {k: v for k, v in (("rewards", episode.rewards), ("terminated", episode.terminated)) if v is not None}
+        extra = {k: v for k, v in (("rewards", episode.rewards), ("terminated", episode.terminated),
+                                   ("stage", episode.stage)) if v is not None}
         np.savez_compressed(path, vertices=episode.vertices, robot=episode.robot,
                             actions=episode.actions, metadata=json.dumps(episode.metadata), **extra)
         return path
@@ -77,7 +82,8 @@ class StateEpisodeStore:
         episode = StateEpisode(vertices=data["vertices"], robot=data["robot"], actions=data["actions"],
                                metadata=json.loads(str(data["metadata"])),
                                rewards=data["rewards"] if "rewards" in data else None,
-                               terminated=data["terminated"] if "terminated" in data else None)
+                               terminated=data["terminated"] if "terminated" in data else None,
+                               stage=data["stage"] if "stage" in data else None)
         episode.validate()
         return episode
 

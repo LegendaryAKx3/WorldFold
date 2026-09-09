@@ -206,6 +206,89 @@ across rounds, so offset coverage has to come from collection. To resume
 OMP_NUM_THREADS=1 .venv/bin/python scripts/loop_experiment.py --stage run --output outputs/cloth_angles/loop_experiment_anchored --disagreement-coef 2.0 --bc-coef-schedule 1.0 0.5 0.25
 ```
 
+## 7. A harder task: the quarter fold
+
+The single-corner task is solved at 100% by PPO with no world model, so it
+cannot show what imagination adds. `cloth_fold_rl/quarter_fold_env.py` is a
+two-stage task on the same cloth. In stage 0 the left arm carries cloth_10
+onto cloth_0 and the right arm carries cloth_120 onto cloth_110 (a fold about
+y = 0), both release, and the corners must stay within 5 cm of their goals
+for 20 steps. In stage 1 the right arm picks up the stacked cloth_0 and
+cloth_10, carries them onto cloth_110 (a fold about x = 0), releases, and
+the stack must stay placed for 20 steps. Only the right arm reaches the
+stack (the README's reach table). Rewards are the same potential shaping per
+move with a third regime for a released and placed corner, a stage bonus of
+10, a success bonus of 20, drag and instability terminations, 12 actions,
+400 steps.
+
+Two simulator changes were needed, both as constructor options with the old
+behaviour as default. Each gripper welds one hard-wired vertex in the stock
+env; the right gripper here may weld cloth_120, cloth_0 and cloth_10, every
+one within the grasp radius when it closes, so it can pick up a stack. The
+grasp radius is 4 cm instead of 3: corners placed within the 5 cm tolerance
+can sit 5 cm apart, beyond what a 3 cm radius covers from any one point.
+
+The scripted expert runs one single-corner phase machine per move, with the
+left arm parking out of the way in stage 1. Two things make the task hard
+for it. A released corner springs back toward the fold line, by 4 to 5 cm
+for the half fold and anywhere from under 1 cm to over 8 cm for the
+two-layer stack, depending on the randomized cloth. The expert places past
+the goal by the mean spring-back, and in stage 1 also waits for the cloth to
+settle and re-grasps with the measured error added to its goal, up to twice.
+On 30 fresh seeds with physical randomization:
+
+| | Episodes |
+|---|---:|
+| success | 21 / 30 |
+| reached stage 1 | 29 / 30 |
+| needed a corrective re-placement | 14 / 30 |
+| mean steps | 317 |
+
+Failures are time limits on the second placement, and one pickup that pushed
+the stack apart. The world-model stack is now parametrized by a task
+(`cloth_angles/tasks.py`: arms, staged moves, weld corners, release rule),
+and the analytic reward carries the stage and settle counter through a
+rollout. Checked against the recorded rewards of collected quarter-fold
+episodes, the maximum difference is 2e-6 and every stage transition and
+termination matches.
+
+Data: 300 episodes (100 each of expert, noisy expert and forced release,
+seeds 40000 upward, 10 per kind held out), 95,682 training transitions. The
+same full-state L1 predictor (393 values, 12 actions, 10,000 updates, three
+seeds) on the 30 test episodes, vertex MAE and cloth_10 error in millimetres:
+
+| Horizon | World model | Persistence | Const. vel. (vertex) |
+|---|---:|---:|---:|
+| 1 | 0.181 / 1.5 | 0.365 / 3.4 | 0.142 |
+| 5 | 0.782 / 5.9 | 1.672 / 14.6 | 1.080 |
+| 10 | 1.470 / 11.6 | 3.156 / 26.6 | 2.762 |
+| 10, corner grasped at origin | 1.704 / 20.1 | 8.440 / 85.0 | 7.350 |
+
+Seed spread is below 0.01 mm. The training-window vertex error is 0.147 mm
+against 0.181 on test, a wider gap than the single task's at a similar
+number of transitions; the episodes are longer and more varied.
+
+### First imagination run: a negative result
+
+Same recipe as section 5 (world model 20,000 updates, clone 3,000 updates,
+imagination 3,000 updates at horizon 10 with anchor weight 1), 20 seeds:
+
+| Policy | Success | Reached stage 1 | Grasp | Fold score |
+|---|---:|---:|---:|---:|
+| expert | 10/20 | 18/20 | 100% | 0.88 |
+| clone | 0/20 | 15/20 | 95% | 0.69 |
+| clone + imagination | 0/20 | 0/20 | 5% | 0.02 |
+| scratch + imagination | 0/20 | 0/20 | 0% | 0.00 |
+
+The clone completes the half fold on most seeds and never the second fold.
+Imagination then destroyed it. The imagined actor's error to the data
+actions grew from 0.063 to 0.097, nearly all of it a constant bias on two
+joints (left elbow +0.28, right shoulder pan +0.18 where the data averages
+zero). Over ten imagined steps that moves an end effector 3 to 4 cm and
+earns a small positive potential; over 400 real steps it walks the arms
+away from the cloth, which a ten-step horizon never shows the model. The
+anchor weight that held on the single task does not hold here.
+
 ## Artifacts and reproduction
 
 Everything under `outputs/cloth_angles/` is gitignored. `timing_benchmark/`
@@ -222,6 +305,8 @@ arm B cloning data) hold section 6.
 
 ```bash
 OMP_NUM_THREADS=1 .venv/bin/python scripts/collect_fold_state_episodes.py --per-kind 60 --test-per-kind 10 --seed-base 30000 --output outputs/cloth_angles/fold_state_v2
+OMP_NUM_THREADS=1 .venv/bin/python -m cloth_fold_rl.quarter_fold_expert --episodes 30 --seed-base 100 --quiet
+OMP_NUM_THREADS=1 .venv/bin/python scripts/collect_fold_state_episodes.py --task quarter --per-kind 100 --test-per-kind 10 --seed-base 40000 --output outputs/cloth_angles/quarter_state
 OMP_NUM_THREADS=1 .venv/bin/python scripts/benchmark_state_predictor.py --data outputs/cloth_angles/fold_state_v2 --output outputs/cloth_angles/state_benchmark_v2_250 --variants state_l1 vertex_l1 state_mse
 OMP_NUM_THREADS=4 .venv/bin/python scripts/train_imagined_actor.py --data outputs/cloth_angles/fold_state_v2 --output outputs/cloth_angles/imagined_actor_v3
 OMP_NUM_THREADS=1 .venv/bin/python scripts/train_imagined_actor.py --output outputs/cloth_angles/imagined_actor_v3 --eval-only --eval-episodes 60 --eval-seed-base 60000

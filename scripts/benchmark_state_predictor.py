@@ -32,7 +32,7 @@ from cloth_angles.model.state_predictor import ResidualStatePredictor
 
 BURN_IN, HORIZON, STRIDE = 10, 10, 10
 HORIZONS = (1, 5, 10)
-VERTEX_DIM, ACTION_DIM = 363, 6
+VERTEX_DIM = 363
 MOVING_CORNER = 10  # cloth_10, the vertex welded to the left gripper
 VARIANTS = ("state_l1", "vertex_l1", "state_mse")
 METRICS = ("vertex_mae", "corner_err")
@@ -109,7 +109,7 @@ def train_job(job):
     train, test = load_split(Path(data), train_per_kind)
     cur, prev, act, nxt = transitions(train, variant)
     torch.manual_seed(seed)
-    model = ResidualStatePredictor(cur.shape[1], ACTION_DIM, loss=variant.split("_")[1])
+    model = ResidualStatePredictor(cur.shape[1], act.shape[1], loss=variant.split("_")[1])
     model.fit_normalizer(cur.numpy(), nxt.numpy())
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     rng = np.random.default_rng(seed)

@@ -98,7 +98,7 @@ class SingleCornerFoldEnv(gym.Wrapper):
         return float(np.linalg.norm(self._moving_corner() - self._goal))
 
     def _grasp_active(self):
-        return bool(self.env.data.eq_active[self.env._weld_id["left_"]])
+        return self.env.grasp_active("left_")
 
     def _anchor_drift(self):
         """How far the corners that are supposed to stay put have been dragged."""
