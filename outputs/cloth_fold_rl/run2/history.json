@@ -1,0 +1,24 @@
+[
+  {
+    "round": 1,
+    "timesteps": 28672,
+    "wall_minutes": 19.00062118958061,
+    "eval": {
+      "success_rate": 1.0,
+      "mean_fold_score": 0.9170019255050146,
+      "grasp_rate": 1.0,
+      "mean_reward": 26.084877669705758
+    }
+  },
+  {
+    "round": 2,
+    "timesteps": 57344,
+    "wall_minutes": 21.020781359018294,
+    "eval": {
+      "success_rate": 0.625,
+      "mean_fold_score": 0.7276406417943574,
+      "grasp_rate": 1.0,
+      "mean_reward": 18.046659117875873
+    }
+  }
+]

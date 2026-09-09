@@ -8,4 +8,8 @@ outputs/ppo/
 outputs/cloth_angles/*
 !outputs/cloth_angles/videos/
 !outputs/cloth_angles/videos/*
+# NOTE: outputs/cloth_fold_rl/ is deliberately NOT ignored -- the trained weights
+# are committed so `python -m cloth_fold_rl.run_trained` works straight from a
+# clone, with no retraining.
+.DS_Store
 MUJOCO_LOG.TXT
