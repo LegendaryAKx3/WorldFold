@@ -19,6 +19,7 @@ Windows: see [mujuco/other/setup.md](mujuco/other/setup.md).
 
 ```bash
 python mujuco/sim_main.py                                  # scripted fold demo in the viewer
+python mujuco/prove_grabber.py                             # physical grabber PoC (no weld cheat)
 python -m cloth_angles.collect_episodes --config cloth_angles/config.yaml
 python -m cloth_angles.train --config cloth_angles/config.yaml
 python scripts/train_ppo.py --env MuJoCoTouch-v1 --timesteps 100000

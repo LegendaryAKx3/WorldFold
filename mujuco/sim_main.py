@@ -51,12 +51,13 @@ class ClothFoldEnv(gym.Env):
 
     def __init__(self, control_dt=0.05, max_episode_steps=200, action_scale_pos=0.03, action_scale_rot=0.1,
                  action_mode="ee_delta", observation_mode="state", image_size=(84, 84),
-                 camera_names=None, domain_randomization=False, n_cloth_samples=9, n_tasks=4):
+                 camera_names=None, domain_randomization=False, n_cloth_samples=9, n_tasks=4,
+                 spec_hook=None):
         self.control_dt = control_dt
         self.max_episode_steps = max_episode_steps
         self.n_substeps = int(round(control_dt / ARM_TIMESTEP))   # 100
 
-        self.model = compile_model(ARM_TIMESTEP)
+        self.model = compile_model(ARM_TIMESTEP, spec_hook=spec_hook)
         self.data = mujoco.MjData(self.model)
         self.prefixes = ["left_", "right_"]
 
@@ -598,7 +599,9 @@ def build_cloth_xml(timestep):
     """
     return xml
 
-def compile_model(timestep):
+def compile_model(timestep, spec_hook=None):
+    # spec_hook(spec) runs just before compile, so experiments (e.g. the grabber
+    # proof of concept) can add geometry without forking this file. None = stock model.
     spec = mujoco.MjSpec.from_string(build_cloth_xml(timestep))
 
     # attach two independent copies of the SO101 arm, each with its own name prefix
@@ -632,6 +635,9 @@ def compile_model(timestep):
         # torquescale=0 -> position-only weld (a point vertex has no meaningful orientation);
         # relpose_pos is overwritten at grab time in close_gripper.
         eq.data[:] = [0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  1.0, 0.0, 0.0, 0.0,  0.0]
+
+    if spec_hook is not None:
+        spec_hook(spec)
 
     model = spec.compile()
 
