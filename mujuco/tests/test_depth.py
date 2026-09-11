@@ -1,14 +1,16 @@
+import os
+import sys
+
 import numpy as np
 
-from sim_main import ClothFoldEnv, DEPTH_MAX, DEPTH_MIN, TABLE_TOP_Z, CAMERA_POS
-
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from sim_main import ClothFoldEnv, DEPTH_MAX, DEPTH_MIN, TABLE_TOP_Z, CAMERA_POS  # noqa: E402
 
 def test_state_mode_has_no_depth():
     env = ClothFoldEnv(observation_mode="state")
     obs, _ = env.reset(seed=0)
     assert "depth" not in obs
     assert "depth" not in env.observation_space.spaces
-
 
 def test_pixels_mode_depth_shape_range_and_noise():
     env = ClothFoldEnv(observation_mode="pixels", image_size=(48, 64))

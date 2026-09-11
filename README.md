@@ -47,7 +47,7 @@ reconstruction MAE. Retrain world-model checkpoints produced before this timing
 fix: their decoder was trained against a target one timestep ahead of its latent.
 Existing PPO checkpoints are unaffected.
 
-Run the cloth-angle tests with `python -m pytest cloth_angles/tests` (install
+Run the tests with `python -m pytest mujuco/tests cloth_angles/tests` (install
 `pytest` in the development environment first).
 
 - [PPO baseline](docs/ppo_training.md)
