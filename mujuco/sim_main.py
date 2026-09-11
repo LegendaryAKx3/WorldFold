@@ -44,13 +44,11 @@ QACC_LIMIT           = 1e5
 TASK_NAMES           = ["fold", "drop", "push", "drag"]   # index = task id (one-hot slot)
 
 # for repositioning the cam
-# Depth sensor model (RealSense D435-ish). Depth comes from the renderer's z-buffer,
-# never from body/vertex positions, so the policy only sees what a real camera would.
-DEPTH_MIN            = 0.2      # m; closer reads as 0 (invalid), like real drivers
-DEPTH_MAX            = 3.0      # m; farther reads as 0
-DEPTH_NOISE_STD_1M   = 0.002    # m std at 1m; grows with depth^2
-DEPTH_QUANT_1M       = 0.001    # m resolution at 1m; grows with depth^2
-DEPTH_EDGE_JUMP      = 0.05     # m per pixel; steeper depth edges become holes (grazing angle / occlusion)
+DEPTH_MIN            = 0.2      # m
+DEPTH_MAX            = 3.0      # m
+DEPTH_NOISE_STD_1M   = 0.002    # m 
+DEPTH_QUANT_1M       = 0.001    # m 
+DEPTH_GRAZING_DEG    = 80.0     # surfaces tilted past this from the view ray become holes 
 
 # CAMERA_POS           = (1, 5, 1)
 CAMERA_POS           = (0.75, -0.75, 0.75)
@@ -116,6 +114,11 @@ class ClothFoldEnv(gym.Env):
             spaces["depth"] = gym.spaces.Box(0.0, DEPTH_MAX, shape=(H, W, len(self.camera_names)), dtype=np.float32)
         self.observation_space = gym.spaces.Dict(spaces)
         self._renderer = None   # lazily created on first image render
+        # vertical angle one pixel spans, per camera; grazing-angle test needs it
+        self._pixel_angle = {}
+        for cam in self.camera_names:
+            fovy = float(self.model.cam_fovy[self.model.camera(cam).id])
+            self._pixel_angle[cam] = np.radians(fovy) / H
 
         self._step_count = 0
 
@@ -212,16 +215,19 @@ class ClothFoldEnv(gym.Env):
             return True
         return False
 
-    def _sensor_depth(self, raw):
+    def _sensor_depth(self, raw, pixel_angle):
         depth = raw.astype(np.float32)
         scale = depth * depth
         noise = self.np_random.normal(0.0, DEPTH_NOISE_STD_1M, depth.shape).astype(np.float32)
         depth = depth + noise * scale
         step = DEPTH_QUANT_1M * scale
         depth = np.round(depth / step) * step
+
+        # depth change per pixel / (depth * pixel angle) ~ tan(angle between surface and view ray)
         dy, dx = np.gradient(raw)
-        edge = np.hypot(dx, dy) > DEPTH_EDGE_JUMP
-        invalid = (depth < DEPTH_MIN) | (depth > DEPTH_MAX) | edge
+        slope = np.hypot(dx, dy) / (raw * pixel_angle)
+        grazing = slope > np.tan(np.radians(DEPTH_GRAZING_DEG))
+        invalid = (depth < DEPTH_MIN) | (depth > DEPTH_MAX) | grazing
         depth[invalid] = 0.0
         return depth
 
@@ -237,7 +243,7 @@ class ClothFoldEnv(gym.Env):
             self._renderer.update_scene(self.data, camera=cam)
             frames.append(self._renderer.render())
             self._renderer.enable_depth_rendering()
-            depths.append(self._sensor_depth(self._renderer.render()))
+            depths.append(self._sensor_depth(self._renderer.render(), self._pixel_angle[cam]))
             self._renderer.disable_depth_rendering()
         image = np.concatenate(frames, axis=2).astype(np.uint8)
         depth = np.stack(depths, axis=2).astype(np.float32)
