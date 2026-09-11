@@ -1,17 +1,16 @@
 """Scripted expert for the quarter fold: one FoldExpert per (stage, arm) move,
-staged. Both stages now run the identical synchronized-pair pattern: two
-FoldExperts act every step, both hold their placed corners until the other has
-placed too, then both release and retreat together.
+staged. Both stages run the same synchronized-pair pattern: two FoldExperts
+act every step, both hold their placed corners until the other has placed too,
+then both release and retreat together.
 
 A released corner springs back: the fold's bend pulls it a few centimetres
 toward the fold line and the flap narrows across it. Placed exactly on the
 goal, corners settle away from it and the fold fails, so each move places past
 its goal by an OVERSHOOT (the mean spring-back measured on the stock cloth).
-In stage 1 both moves converge on the SAME target corner (cloth_110) at the
-same time -- a genuine two-arm carry of the two-layer west stack -- so their
-OVERSHOOT values also carry a small lateral offset (+-2 cm in y) to keep the
-two physical grippers from trying to occupy the same point; GRASP_RADIUS
-(4 cm) and SUCCESS_DIST (5 cm) both tolerate that spread. Feasibility check:
+Stage 1 carries both west-edge points east onto the east edge (right arm: the
+two-layer south stack -> cloth_110; left arm: the crease-end vertex ->
+cloth_115), so both overshoot a little further east (+x) than their goal.
+Feasibility check:
 
     python -m cloth_fold_rl.quarter_fold_expert --episodes 5
 """
@@ -26,17 +25,10 @@ from cloth_fold_rl.expert import FoldExpert
 from cloth_fold_rl.quarter_fold_env import STAGES, QuarterFoldEnv
 
 # per (stage, arm): metres past the goal to place the corner at (the mean
-# spring-back measured on the stock cloth). Stage 1 folds the two south corners
-# inward toward centre; a released flap springs back outward, so each arm places
-# a few cm further in (+x for the west arm, -x for the east arm). The two goals
-# sit either side of centre and the two arms approach from opposite sides, so
-# their grippers stay clear of each other.
+# spring-back measured on the stock cloth). Stage 1 carries both west-edge
+# points east, so both overshoot a little further east than their goal.
 OVERSHOOT = {(0, "left_"): np.array([-0.04, -0.03, 0.0]), (0, "right_"): np.array([0.02, -0.03, 0.0]),
-             (1, "left_"): np.array([0.0, -0.02, 0.0]), (1, "right_"): np.array([0.0, -0.02, 0.0])}
-
-
-def corner_index(env, vertex):
-    return env.unwrapped._corner_ids.index(env.unwrapped._cloth_body_ids[vertex])
+             (1, "right_"): np.array([0.02, 0.0, 0.0]), (1, "left_"): np.array([0.02, 0.0, 0.0])}
 
 
 class QuarterFoldExpert:
@@ -49,8 +41,8 @@ class QuarterFoldExpert:
             for k, move in enumerate(stage.moves):
                 goal = lambda m=move, s=s: env.goal(m) + OVERSHOOT[(s, m.prefix)] + self.correction[(s, m.prefix)]
                 self.experts[(s, move.prefix)] = FoldExpert(env, seed=seed + 10 * s + k, prefix=move.prefix,
-                                                            corner=[corner_index(env, c) for c in move.corners],
-                                                            goal=goal, release=True)
+                                                            corner=list(move.corners), goal=goal, release=True,
+                                                            raw_vertex=True)
         self.retries = 0   # kept for run_episode's row dict; no retry logic anymore
         self.reset()
 

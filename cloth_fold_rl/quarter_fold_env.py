@@ -15,14 +15,14 @@ where the two arms sat at opposite corners.
            not be dragged. This leaves a half-height sheet along the south edge
            with a two-layer stack at each end: cloth_0+cloth_10 at the west
            corner, cloth_110+cloth_120 at the east corner.
-  stage 1  a fold about x = 0, run as a synchronized pair mirroring stage 0
-           instead of parking one arm: the left arm grasps the west stack and
-           the right arm grasps the east stack, and both fold their side inward
-           toward the centre (goals CENTRE_W / CENTRE_E, either side of x = 0).
-           The two stacks are 0.30 m apart and the two goals ~0.12 m apart, so
-           the grippers never converge on one point. Both release and the four
-           carried corners must stay placed; the cloth centre (CENTRE) is the
-           anchor that must not be dragged.
+  stage 1  a fold about x = 0: the whole WEST short edge flips onto the EAST
+           short edge, both its corners carried at once by different arms
+           (a real two-gripper edge fold, not each arm handling its own side).
+           The right arm carries the two-layer south stack (cloth_0+cloth_10)
+           onto cloth_110's start; the left arm carries the single-layer
+           crease-end vertex (cloth_5) onto cloth_115's start. Both release and
+           the two carried points must stay placed; the east edge's two
+           corners (cloth_110, cloth_120) are the anchors that must not drag.
 
 The base env welds one hard-wired vertex per gripper within GRASP_RADIUS. Here
 each gripper's weld list holds its stage-0 corner and its stage-1 corner (see
@@ -56,23 +56,26 @@ from sim_main import CLOTH_COUNT, ClothFoldEnv, StateOnlyWrapper  # noqa: E402 (
 
 N = CLOTH_COUNT
 CLOTH_0, CLOTH_10, CLOTH_110, CLOTH_120 = 0, N - 1, (N - 1) * N, N * N - 1
-# Non-corner goal vertices for stage 1 (row-major index = ix*N + iy, iy = 0 is
-# the south edge). The two south corners fold inward to a point either side of
-# centre, kept apart so the two grippers never converge on one spot:
-CENTRE_W = 3 * N          # (-0.06, -0.15) south edge, west of centre
-CENTRE_E = 7 * N          # (+0.06, -0.15) south edge, east of centre
-CENTRE = (N // 2) * N + N // 2   # (0, 0) cloth centre -- the stage-1 anchor
+# Stage-1 goal vertices, the midpoints of the west/east SHORT edges after the
+# stage-0 fold (row-major index = ix*N + iy). CLOTH_5 (-h, 0) is the crease-end
+# of the west short edge; CLOTH_115 (+h, 0) is its mirror on the east edge.
+CLOTH_5 = (N // 2)               # (-h, 0): west short edge, crease end
+CLOTH_115 = (N - 1) * N + N // 2  # (+h, 0): east short edge, crease end
 # Each arm welds its stage-0 corner and its stage-1 corner. In stage 0 the two
 # weld vertices of an arm are 0.30 m apart (only the near one is in range), so
-# one weld each. In stage 1 the arm grasps the stacked south corner (both its
-# own stage-1 vertex and the stage-0 vertex now folded on top of it are within
-# GRASP_RADIUS), so it lifts the whole two-layer stack on that side. The two
-# arms grasp opposite sides (west vs east, 0.30 m apart), so no shared vertex.
-GRASP_CORNERS = {"left_": (CLOTH_10, CLOTH_0), "right_": (CLOTH_120, CLOTH_110)}
+# one weld each. Stage 1 folds the whole WEST short edge onto the east short
+# edge (both its corners: the two-layer south stack and the single-layer
+# crease-end vertex) -- a real edge-to-edge fold, not each arm handling its own
+# side. Reach is asymmetric though: both west-edge points sit at x=-h, so
+# they're near the LEFT arm and a genuine cross-table reach for the RIGHT arm
+# (measured via solve_ik: right_ -> west stack 0.5cm, right_ -> west midpoint
+# 3.3cm, both well under GRASP_RADIUS). The right arm keeps doing the stack
+# (its stage-0 role, and the easier of the two reaches); the left arm -- which
+# is already home at the west edge -- carries the lone midpoint vertex across
+# to CLOTH_115 (measured reach 4.3cm, also within tolerance).
+GRASP_CORNERS = {"left_": (CLOTH_10, CLOTH_5), "right_": (CLOTH_120, CLOTH_0, CLOTH_10)}
 GRASP_RADIUS = 0.06      # both layers of a stacked corner weld even if the
-                         # stage-0 fold left them a few cm apart; the two arms
-                         # grasp opposite sides (0.30 m apart) so a wider radius
-                         # never lets one arm steal the other's vertex
+                         # stage-0 fold left them a few cm apart
 RELEASE_BONUS = 3.0      # potential step for letting go of a placed corner
 STAGE_BONUS = 10.0
 SETTLE_STEPS = 20        # 1.0 s released and placed before a stage completes
@@ -96,8 +99,8 @@ class Stage:
 STAGES = (
     Stage(moves=(Move("left_", (CLOTH_10,), CLOTH_0), Move("right_", (CLOTH_120,), CLOTH_110)),
           anchors=((CLOTH_0, CLOTH_0), (CLOTH_110, CLOTH_110))),
-    Stage(moves=(Move("left_", (CLOTH_0, CLOTH_10), CENTRE_W), Move("right_", (CLOTH_110, CLOTH_120), CENTRE_E)),
-          anchors=((CENTRE, CENTRE),)),
+    Stage(moves=(Move("right_", (CLOTH_0, CLOTH_10), CLOTH_110), Move("left_", (CLOTH_5,), CLOTH_115)),
+          anchors=((CLOTH_110, CLOTH_110), (CLOTH_120, CLOTH_120))),
 )
 
 

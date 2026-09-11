@@ -752,6 +752,8 @@ def make_render_fn(model, data):
         np.array(side_faces, dtype=faces.dtype).reshape(-1, 3),  # side walls
     ])
 
+    last_vertices = {"v": None}
+
     def render_fn(scene):
         # mjviser auto-tracks the first movable body -- which here is a cloth corner
         # vertex, so the camera chases that wobbling corner and the whole scene
@@ -759,6 +761,13 @@ def make_render_fn(model, data):
         scene.camera_tracking_enabled = False
         scene.update_from_mjdata(data)
         vertices = np.array(data.flexvert_xpos)
+        # step_fn only advances physics once every n_substeps calls (see run_*.py's
+        # step_fn), so most render_fn calls see an UNCHANGED cloth. add_mesh_simple
+        # re-sends the whole mesh over the websocket every time it's called; skip the
+        # resend when nothing moved instead of paying that cost for a no-op frame.
+        if last_vertices["v"] is not None and np.array_equal(vertices, last_vertices["v"]):
+            return
+        last_vertices["v"] = vertices.copy()
         # visual slab, decoupled from the physics radius: a vertex center rests
         # ~CLOTH_RADIUS above the table, so drop to the cloth's actual bottom surface
         # (center - radius, ~table level) and build a thin VISUAL_THICKNESS slab up
