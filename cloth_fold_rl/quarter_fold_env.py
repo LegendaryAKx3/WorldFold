@@ -1,24 +1,33 @@
-"""Quarter fold: two arms fold the cloth in half and release, then one arm folds
-the halved cloth in half again and releases. The fold has to hold on its own.
+"""Quarter fold: two arms fold the cloth in half and release, then the same two
+arms fold the halved cloth in half again and release. The fold has to hold on
+its own.
 
 A wrapper around ClothFoldEnv in the style of fold_env.SingleCornerFoldEnv,
 with two stages. Corner positions at reset: cloth_0 (-h, -h), cloth_10
-(-h, +h), cloth_110 (+h, -h), cloth_120 (+h, +h), h = 0.15 m.
+(-h, +h), cloth_110 (+h, -h), cloth_120 (+h, +h), h = 0.15 m. Both arms sit
+side-by-side on the south (-y) table edge (see mujuco/sim_main.py's
+ARM_BASE_LEFT/RIGHT), which puts both south corners (cloth_0, cloth_110)
+inside BOTH arms' reach -- unlike the old diagonal placement, where only one
+arm could ever reach the far corner of a two-layer stack.
 
   stage 0  the left arm carries cloth_10 onto cloth_0 and the right arm carries
            cloth_120 onto cloth_110 (a fold about y = 0); both release and the
            corners must stay placed for SETTLE_STEPS. cloth_0 and cloth_110 must
            not be dragged.
-  stage 1  the right arm picks up the stacked corners cloth_0 + cloth_10 and
-           carries them onto cloth_110 (a fold about x = 0), releases, and the
-           corners must stay placed. Only the right arm reaches (-h, -h) (see
-           cloth_fold_rl/README.md); cloth_110 and cloth_120 must not be dragged.
+  stage 1  a fold about x = 0: the left arm carries cloth_10 (the corner it
+           already knows, now sitting stacked on cloth_0) onto cloth_110, and
+           the right arm carries cloth_0 onto cloth_110 too, at the same time --
+           a genuine two-arm carry of the two-layer west stack, mirroring
+           stage 0's synchronized-pair structure instead of parking one arm.
+           Both release and the corners must stay placed; cloth_110 and
+           cloth_120 must not be dragged.
 
-The base env welds one hard-wired vertex per gripper within 3 cm. Here the
-right gripper may weld cloth_120, cloth_0 and cloth_10 (every one within
-GRASP_RADIUS when it closes), so it can pick up the stack, and the radius is
-4 cm: corners placed within SUCCESS_DIST of each other can sit up to 5 cm
-apart, beyond what a 3 cm radius can cover from any single point.
+The base env welds one hard-wired vertex per gripper within 3 cm. Here each
+gripper may weld two vertices (its stage-0 corner and its stage-1 corner),
+one weld each -- see GRASP_CORNERS. The two stage-1 goals are nudged a few cm
+apart (see quarter_fold_expert.OVERSHOOT) so the two physical grippers don't
+try to occupy the same point when they converge on the same target corner;
+GRASP_RADIUS is 4 cm and SUCCESS_DIST (5 cm) tolerates that spread.
 
 Reward: potential-based shaping summed over the stage's moves. Each move has
 three regimes, free (reach the corner) / grasped (carry it) / released and
@@ -44,7 +53,12 @@ from sim_main import CLOTH_COUNT, ClothFoldEnv, StateOnlyWrapper  # noqa: E402 (
 
 N = CLOTH_COUNT
 CLOTH_0, CLOTH_10, CLOTH_110, CLOTH_120 = 0, N - 1, (N - 1) * N, N * N - 1
-GRASP_CORNERS = {"left_": (CLOTH_10,), "right_": (CLOTH_120, CLOTH_0, CLOTH_10)}
+# left keeps the same corner both stages (cloth_10, grasped in stage 0 and
+# again in stage 1 once it is stacked on cloth_0); right swaps its stage-0
+# corner (cloth_120) for the stage-1 one (cloth_0). Neither arm's weld list
+# contains a vertex the OTHER arm might also be standing on at grasp time, so
+# there's no ambiguity about which gripper a stacked vertex welds to.
+GRASP_CORNERS = {"left_": (CLOTH_10,), "right_": (CLOTH_120, CLOTH_0)}
 GRASP_RADIUS = 0.04
 RELEASE_BONUS = 3.0      # potential step for letting go of a placed corner
 STAGE_BONUS = 10.0
@@ -69,7 +83,7 @@ class Stage:
 STAGES = (
     Stage(moves=(Move("left_", (CLOTH_10,), CLOTH_0), Move("right_", (CLOTH_120,), CLOTH_110)),
           anchors=((CLOTH_0, CLOTH_0), (CLOTH_110, CLOTH_110))),
-    Stage(moves=(Move("right_", (CLOTH_0, CLOTH_10), CLOTH_110),),
+    Stage(moves=(Move("left_", (CLOTH_10,), CLOTH_110), Move("right_", (CLOTH_0,), CLOTH_110)),
           anchors=((CLOTH_110, CLOTH_110), (CLOTH_120, CLOTH_110))),
 )
 

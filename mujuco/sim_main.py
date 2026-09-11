@@ -15,8 +15,19 @@ CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2   # cloth spans +-0.
 
 # SO101 arm model
 ARM_XML_PATH          = os.path.join(os.path.dirname(so101_nexus.__file__), "assets", "SO101", "so101_new_calib.xml")
-ARM_BASE_LEFT         = (-0.30,  CLOTH_HALF, TABLE_TOP_Z) 
-ARM_BASE_RIGHT        = ( 0.30, -CLOTH_HALF, TABLE_TOP_Z)  
+# Side-by-side on the -y (south) edge of the table, both facing +y (into the
+# cloth) instead of the old diagonal-corner placement. Bases are 0.44m apart
+# in x (0.22m either side of center) and 0.24m south of the cloth edge -- the
+# spacing that puts BOTH near-edge corners (cloth_0, cloth_110) inside BOTH
+# arms' reach at once (see cloth_fold_rl/README.md's reachability table,
+# re-measured for this geometry via the same 40k-sample FK sweep method).
+ARM_BASE_LEFT         = (-0.22, -(CLOTH_HALF + 0.09), TABLE_TOP_Z)
+ARM_BASE_RIGHT        = ( 0.22, -(CLOTH_HALF + 0.09), TABLE_TOP_Z)
+# both arms rotated 90 deg about z from their zero pose, so "local +x" (the
+# old left arm's stock forward direction) points world +y, i.e. north into
+# the cloth from the south edge. Both bases use this SAME quat now -- there is
+# no more "left faces one way, right faces the opposite way" split.
+ARM_BASE_QUAT         = [0.70710678, 0.0, 0.0, 0.70710678]
 ARM_JOINTS            = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 GRIPPER_CLOSED        = -0.1
 ARM_TIMESTEP         = 0.0005     # contact-heavy grasp needs 0.5ms; 1ms explodes on contact
@@ -611,14 +622,16 @@ def compile_model(timestep, grasp_corners=GRASP_CORNERS, spec_hook=None):
     # proof of concept) can add geometry without forking this file. None = stock model.
     spec = mujoco.MjSpec.from_string(build_cloth_xml(timestep))
 
-    # attach two independent copies of the SO101 arm, each with its own name prefix
+    # attach two independent copies of the SO101 arm, each with its own name prefix.
+    # both sit on the south edge, both rotated the same way (ARM_BASE_QUAT) -- no
+    # more mirrored 180deg-about-z split, since neither arm needs to face "away"
+    # from the other anymore.
     left_spec = mujoco.MjSpec.from_file(ARM_XML_PATH)
-    lf = spec.worldbody.add_frame(pos=ARM_BASE_LEFT)
+    lf = spec.worldbody.add_frame(pos=ARM_BASE_LEFT, quat=ARM_BASE_QUAT)
     lf.attach_body(left_spec.body("base"), "left_", "")
 
     right_spec = mujoco.MjSpec.from_file(ARM_XML_PATH)
-    rf = spec.worldbody.add_frame(pos=ARM_BASE_RIGHT)
-    rf.quat = [0.0, 0.0, 0.0, 1.0]   # 180 deg about z, so this arm faces -x toward the cloth
+    rf = spec.worldbody.add_frame(pos=ARM_BASE_RIGHT, quat=ARM_BASE_QUAT)
     rf.attach_body(right_spec.body("base"), "right_", "")
 
     # SIM-ONLY GRASP CHEAT: a real gripper can't reliably pinch flat cloth, so we fake
@@ -627,9 +640,13 @@ def compile_model(timestep, grasp_corners=GRASP_CORNERS, spec_hook=None):
     # and flips data.eq_active). WELD is used over CONNECT because its relative pose is
     # settable at runtime -- CONNECT bakes its anchor at compile (home pose), which would
     # hold the cloth ~9cm from the claw. the cloth grid is row-major (index = ix*COUNT+iy);
-    # by default each gripper gets one weld, to its diagonal corner: left cloth_10 at
-    # (-h, +h), right cloth_110 at (+h, -h). grasp_corners can list several vertices
-    # per gripper, one weld each, so a gripper can pick up stacked corners.
+    # by default each gripper gets one weld: left cloth_10 at (-h, +h), right
+    # cloth_110 at (+h, -h). both arms now sit side-by-side on the south (-y)
+    # table edge (same y, offset in x) rather than diagonal corners, so these are
+    # simply the two default single-grasp vertices -- both remain reachable from
+    # the new base positions (see cloth_fold_rl/README.md's reachability table).
+    # grasp_corners can list several vertices per gripper, one weld each, so a
+    # gripper can pick up stacked corners.
     for prefix, vertices in grasp_corners.items():
       for vertex in vertices:
         eq = spec.add_equality()
