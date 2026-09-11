@@ -30,6 +30,9 @@ ROT_WEIGHT           = 0.2
 MAX_STEP_ROT         = 0.002    # rad per substep
 GRASP_RADIUS         = 0.03     # weld engages when gripper is this close to its corner
 JOINT_DELTA_SCALE    = 0.05     # rad per control step at full action, joint_delta mode
+# cloth vertices each gripper may weld to: every listed vertex within GRASP_RADIUS
+# is welded when the gripper closes, so a gripper can pick up a stack of corners
+GRASP_CORNERS        = {"left_": (CLOTH_COUNT - 1,), "right_": ((CLOTH_COUNT - 1) * CLOTH_COUNT,)}
 HOLD_STEPS           = 10       # consecutive success steps (0.5s) before terminating
 SETTLE_STEPS         = 2000     # 1.0s hands-off settle at reset, mirrors the demo above
 WORKSPACE_XY         = 0.45
@@ -52,12 +55,14 @@ class ClothFoldEnv(gym.Env):
     def __init__(self, control_dt=0.05, max_episode_steps=200, action_scale_pos=0.03, action_scale_rot=0.1,
                  action_mode="ee_delta", observation_mode="state", image_size=(84, 84),
                  camera_names=None, domain_randomization=False, n_cloth_samples=9, n_tasks=4,
-                 spec_hook=None):
+                 grasp_corners=None, grasp_radius=GRASP_RADIUS, spec_hook=None):
         self.control_dt = control_dt
         self.max_episode_steps = max_episode_steps
         self.n_substeps = int(round(control_dt / ARM_TIMESTEP))   # 100
+        self.grasp_corners = dict(GRASP_CORNERS if grasp_corners is None else grasp_corners)
+        self.grasp_radius = grasp_radius
 
-        self.model = compile_model(ARM_TIMESTEP, spec_hook=spec_hook)
+        self.model = compile_model(ARM_TIMESTEP, self.grasp_corners, spec_hook=spec_hook)
         self.data = mujoco.MjData(self.model)
         self.prefixes = ["left_", "right_"]
 
@@ -128,19 +133,16 @@ class ClothFoldEnv(gym.Env):
         self._target_pos = {}
         self._target_quat = {}
 
-        self._weld_id = {}
+        self._weld_ids = {}      # per prefix: one weld per graspable corner
+        self._corner_body = {}   # per prefix: the matching corner body ids
         self._gripper_act = {}
-        self._corner_body = {}
         self._gripper_closed = {"left_": False, "right_": False}
-        corner_names = {"left_": f"cloth_{CLOTH_COUNT - 1}",
-                        "right_": f"cloth_{(CLOTH_COUNT - 1) * CLOTH_COUNT}"}
         for prefix in self.prefixes:
-            weld = self.model.equality(f"{prefix}weld")
-            self._weld_id[prefix] = weld.id
+            self._weld_ids[prefix] = [self.model.equality(f"{prefix}weld_{v}").id for v in self.grasp_corners[prefix]]
+            self._corner_body[prefix] = [self.model.body(f"cloth_{v}").id for v in self.grasp_corners[prefix]]
             gripper_actuator = self.model.actuator(f"{prefix}gripper")
             self._gripper_act[prefix] = gripper_actuator.id
-            corner = self.model.body(corner_names[prefix])
-            self._corner_body[prefix] = corner.id
+        self._weld_id = {p: ids[0] for p, ids in self._weld_ids.items()}   # primary weld, for the viewer
 
         # cloth vertices are bodies cloth_0 .. cloth_(N*N-1) (row-major grid)
         n_vert = CLOTH_COUNT * CLOTH_COUNT
@@ -225,7 +227,7 @@ class ClothFoldEnv(gym.Env):
             v = np.zeros(6)
             mujoco.mj_objectVelocity(self.model, self.data, mujoco.mjtObj.mjOBJ_SITE, sid, v, 0)
             proprio += list(v)
-            proprio.append(float(self.data.eq_active[self._weld_id[p]]))
+            proprio.append(float(self.grasp_active(p)))
         proprio = np.array(proprio, dtype=np.float32)
 
         # task: one-hot(n_tasks) + stage(1) + goal keypoints(12) + progress(4) + time-left(1)
@@ -263,8 +265,8 @@ class ClothFoldEnv(gym.Env):
             "action_clipped": self._action_clipped,
             "left_ik_success": self._ik_ok("left_"),
             "right_ik_success": self._ik_ok("right_"),
-            "left_grasp_active": bool(self.data.eq_active[self._weld_id["left_"]]),
-            "right_grasp_active": bool(self.data.eq_active[self._weld_id["right_"]]),
+            "left_grasp_active": self.grasp_active("left_"),
+            "right_grasp_active": self.grasp_active("right_"),
             "termination_reason": reason,
         }
 
@@ -305,7 +307,8 @@ class ClothFoldEnv(gym.Env):
         for prefix in self.prefixes:
             gripper_act = self.model.actuator(f"{prefix}gripper").id
             self.data.ctrl[gripper_act] = GRIPPER_OPEN
-            self.data.eq_active[self._weld_id[prefix]] = 0
+            for eqid in self._weld_ids[prefix]:
+                self.data.eq_active[eqid] = 0
             self._gripper_closed[prefix] = False
 
         if "cloth_pose" in opts:
@@ -409,6 +412,9 @@ class ClothFoldEnv(gym.Env):
                 new_target = high
             self.data.ctrl[act_id] = new_target
 
+    def grasp_active(self, prefix):
+        return bool(any(self.data.eq_active[eqid] for eqid in self._weld_ids[prefix]))
+
     def set_gripper(self, prefix, command):
         # hysteresis: < -0.3 close, > 0.3 open, else hold current state
         if command < -0.3:
@@ -416,14 +422,14 @@ class ClothFoldEnv(gym.Env):
         elif command > 0.3:
             self._gripper_closed[prefix] = False
         act_id = self._gripper_act[prefix]
-        eqid = self._weld_id[prefix]
         if self._gripper_closed[prefix]:
             self.data.ctrl[act_id] = GRIPPER_CLOSED
-            if self.data.eq_active[eqid] == 0:
-                site = self.data.site_xpos[self._site_id[prefix]]
-                corner = self.data.xpos[self._corner_body[prefix]]
-                gap = float(np.linalg.norm(site - corner))
-                if gap < GRASP_RADIUS:
+            site = self.data.site_xpos[self._site_id[prefix]]
+            for eqid, corner_body in zip(self._weld_ids[prefix], self._corner_body[prefix]):
+                if self.data.eq_active[eqid] != 0:
+                    continue
+                gap = float(np.linalg.norm(site - self.data.xpos[corner_body]))
+                if gap < self.grasp_radius:
                     b1 = self.model.eq_obj1id[eqid]
                     b2 = self.model.eq_obj2id[eqid]
                     R1 = self.data.xmat[b1].reshape(3, 3)
@@ -433,7 +439,8 @@ class ClothFoldEnv(gym.Env):
                     self.data.eq_active[eqid] = 1
         else:
             self.data.ctrl[act_id] = GRIPPER_OPEN
-            self.data.eq_active[eqid] = 0
+            for eqid in self._weld_ids[prefix]:
+                self.data.eq_active[eqid] = 0
 
     def apply_joint_delta(self, prefix, deltas):
         for k in range(len(ARM_JOINTS)):
@@ -599,7 +606,7 @@ def build_cloth_xml(timestep):
     """
     return xml
 
-def compile_model(timestep, spec_hook=None):
+def compile_model(timestep, grasp_corners=GRASP_CORNERS, spec_hook=None):
     # spec_hook(spec) runs just before compile, so experiments (e.g. the grabber
     # proof of concept) can add geometry without forking this file. None = stock model.
     spec = mujoco.MjSpec.from_string(build_cloth_xml(timestep))
@@ -619,17 +626,18 @@ def compile_model(timestep, spec_hook=None):
     # until the arm 'grabs' (close_gripper sets the relpose to the current grab geometry
     # and flips data.eq_active). WELD is used over CONNECT because its relative pose is
     # settable at runtime -- CONNECT bakes its anchor at compile (home pose), which would
-    # hold the cloth ~9cm from the claw. the cloth grid is row-major (index = ix*COUNT+iy),
-    # so the two diagonal corners are:
-    left_corner_body  = f"cloth_{CLOTH_COUNT - 1}"                    # (-h, +h)
-    right_corner_body = f"cloth_{(CLOTH_COUNT - 1) * CLOTH_COUNT}"    # (+h, -h)
-    for prefix, body in [("left_", left_corner_body), ("right_", right_corner_body)]:
+    # hold the cloth ~9cm from the claw. the cloth grid is row-major (index = ix*COUNT+iy);
+    # by default each gripper gets one weld, to its diagonal corner: left cloth_10 at
+    # (-h, +h), right cloth_110 at (+h, -h). grasp_corners can list several vertices
+    # per gripper, one weld each, so a gripper can pick up stacked corners.
+    for prefix, vertices in grasp_corners.items():
+      for vertex in vertices:
         eq = spec.add_equality()
         eq.type = mujoco.mjtEq.mjEQ_WELD
         eq.objtype = mujoco.mjtObj.mjOBJ_BODY
         eq.name1 = f"{prefix}gripper"     # body1: the gripper hand
-        eq.name2 = body                   # body2: the corner cloth vertex
-        eq.name = f"{prefix}weld"         # so we can look it up by id at runtime
+        eq.name2 = f"cloth_{vertex}"      # body2: the corner cloth vertex
+        eq.name = f"{prefix}weld_{vertex}"   # so we can look it up by id at runtime
         eq.active = False                 # off until the arm grabs
         # data = [anchor(3), relpose_pos(3), relpose_quat(4), torquescale(1)].
         # torquescale=0 -> position-only weld (a point vertex has no meaningful orientation);

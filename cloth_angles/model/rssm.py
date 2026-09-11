@@ -6,8 +6,9 @@ stochastic latent, following the spec's minimal DreamerV4-style design.
     z_t ~ posterior(z | h_t, e_t)
     z_prior_t ~ prior(z | h_t)
 
-`observe()` is used during sequence training: it has access to real
-observation embeddings at every step and samples z from the posterior.
+`observe()` infers current states from observation history. Training uses
+`observe_transitions()` to infer next states after consuming each action
+and its resulting observation, including the final transition.
 
 `imagine()` is open-loop: it consumes only an initial latent and a sequence
 of future actions, sampling z from the prior at every step. It must never see
@@ -133,5 +134,36 @@ class RSSM(nn.Module):
         states = []
         for t in range(time):
             state = self.imagine_step(state, actions[:, t])
+            states.append(state)
+        return states
+
+    def observe_transitions(self, embeds: torch.Tensor, actions: torch.Tensor,
+                            next_embeds: torch.Tensor,
+                            is_first: torch.Tensor) -> list[RSSMState]:
+        """Return posterior states at t+1 for (obs_t, action_t, next_obs_t).
+
+        Bootstrap each sequence/episode from obs_t with a zero previous
+        action. Then advance with action_t and condition on next_obs_t.
+        Contiguous transitions reuse the preceding next-state posterior.
+        """
+        batch, time = actions.shape[:2]
+        zero_action = torch.zeros_like(actions[:, 0])
+        state = self.observe_step(self.initial_state(batch, embeds.device),
+                                  zero_action, embeds[:, 0])
+        states = []
+        for t in range(time):
+            if t > 0 and is_first[:, t].any():
+                initial = self.observe_step(self.initial_state(batch, embeds.device),
+                                            zero_action, embeds[:, t])
+                reset = is_first[:, t].bool().view(batch, 1)
+                # Only h and z feed the next recurrent update; its logits
+                # are recomputed below from the new deterministic state.
+                state = RSSMState(
+                    h=torch.where(reset, initial.h, state.h),
+                    z=torch.where(reset, initial.z, state.z),
+                    prior_logits=state.prior_logits,
+                    posterior_logits=state.posterior_logits,
+                )
+            state = self.observe_step(state, actions[:, t], next_embeds[:, t])
             states.append(state)
         return states

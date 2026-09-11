@@ -31,8 +31,11 @@ Checkpoints in the repo:
 | `outputs/cloth_fold_rl/run2/latest.zip` | last fine-tune round (regressed) | 62% |
 | `outputs/cloth_fold_rl/run1/*` | PPO from scratch — kept as the negative result | 0% |
 
-Everything here is a **wrapper** around `mujuco/sim_main.py`. `ClothFoldEnv` is
-not modified, so `cloth_angles/` keeps collecting data against the stock env.
+Everything here is a **wrapper** around `mujuco/sim_main.py`. `ClothFoldEnv`'s
+defaults are unchanged, so `cloth_angles/` keeps collecting data against the
+stock env; the quarter-fold wrapper (`quarter_fold_env.py`) passes it two
+options, `grasp_corners` (several weldable vertices per gripper) and
+`grasp_radius`.
 
 ## Why a wrapper was necessary
 

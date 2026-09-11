@@ -76,15 +76,30 @@ def solve_ik(model, data, site_id, qpos_adr, dof_adr, joint_range, target,
 
 
 class FoldExpert:
-    """Phase machine: approach -> descend -> grasp -> lift -> carry -> place -> hold."""
+    """Phase machine: approach -> descend -> grasp -> lift -> carry -> place -> hold.
+
+    prefix/corner/goal pick the arm, the corner index (or indices, reached for
+    at their mean) in the env's corner list and a callable returning the goal
+    (default: env._goal). With
+    release=True the machine continues hold -> release -> retreat -> done once
+    release_allowed is set (True by default; a coordinator can gate it).
+    """
 
     PHASES = ("approach", "descend", "lift", "carry", "place", "hold")
+    RELEASE_PHASES = ("release", "retreat", "done")
+    OPEN_PHASES = ("approach", "release", "retreat", "done")
+    RETREAT_HEIGHT = 0.05
 
-    def __init__(self, env, seed=0):
+    def __init__(self, env, seed=0, prefix="left_", corner=MOVING_CORNER, goal=None, release=False):
         self.env = env
         self.base = env.unwrapped
         self.rng = np.random.default_rng(seed)
-        self.prefix = "left_"
+        self.prefix = prefix
+        self.corners = tuple(np.atleast_1d(corner))
+        self.goal = goal if goal is not None else (lambda: self.env._goal)
+        if release:
+            self.PHASES = self.PHASES + self.RELEASE_PHASES
+        self.release_allowed = True
         self.site_id = self.base._site_id[self.prefix]
         self.qpos_adr = self.base._arm_qpos_adr[self.prefix]
         self.dof_adr = self.base._arm_dof_adr[self.prefix]
@@ -97,6 +112,7 @@ class FoldExpert:
         self.phase = 0
         self.q_target = None
         self.phase_steps = 0
+        self.retreat_target = None
 
     def _ik(self, target):
         q, err = solve_ik(self.base.model, self.base.data, self.site_id,
@@ -104,9 +120,12 @@ class FoldExpert:
                           target, rng=self.rng)
         return q, err
 
+    def _corner(self):
+        return np.mean([self.base.data.xpos[self.base._corner_ids[c]] for c in self.corners], axis=0)
+
     def _plan(self):
-        corner = self.base.data.xpos[self.base._corner_ids[MOVING_CORNER]].copy()
-        goal = self.env._goal.copy()
+        corner = self._corner()
+        goal = np.asarray(self.goal(), dtype=float).copy()
         name = self.PHASES[self.phase]
         if name == "approach":
             return corner + np.array([0.0, 0.0, 0.06])
@@ -118,14 +137,18 @@ class FoldExpert:
             return np.array([goal[0], goal[1], LIFT_TARGET_Z])
         if name == "place":
             return goal + np.array([0.0, 0.0, 0.02])
-        return None      # hold: stop moving
+        if name == "retreat":
+            if self.retreat_target is None:
+                self.retreat_target = self.base.data.site_xpos[self.site_id] + np.array([0.0, 0.0, self.RETREAT_HEIGHT])
+            return self.retreat_target
+        return None      # hold, release, done: stop moving
 
     def act(self):
         action = np.zeros(6, dtype=np.float32)
         name = self.PHASES[self.phase]
 
-        # gripper: open while approaching, closed from descend onward
-        action[5] = 1.0 if name == "approach" else -1.0
+        # gripper: open while approaching and after release, closed in between
+        action[5] = 1.0 if name in self.OPEN_PHASES else -1.0
 
         target = self._plan()
         if target is not None:
@@ -141,18 +164,23 @@ class FoldExpert:
 
     def _maybe_advance(self, target):
         name = self.PHASES[self.phase]
-        if name == "hold":
+        if name == "done" or (name == "hold" and not (self.release_allowed and "release" in self.PHASES)):
             return
         site = self.base.data.site_xpos[self.site_id]
-        corner = self.base.data.xpos[self.base._corner_ids[MOVING_CORNER]]
+        corner = self._corner()
         reached = target is not None and float(np.linalg.norm(site - target)) < 0.02
 
         advance = False
         if name == "descend":
             # only move on once the weld has actually engaged
-            advance = bool(self.base.data.eq_active[self.base._weld_id[self.prefix]])
+            advance = self.base.grasp_active(self.prefix)
         elif name == "place":
-            advance = float(np.linalg.norm(corner - self.env._goal)) < SUCCESS_DIST
+            advance = float(np.linalg.norm(corner - np.asarray(self.goal()))) < SUCCESS_DIST
+        elif name == "hold":
+            advance = True
+        elif name == "release":
+            # wait for the weld to let go before moving the arm away
+            advance = not self.base.grasp_active(self.prefix) and self.phase_steps >= 2
         else:
             advance = reached
 
@@ -161,3 +189,4 @@ class FoldExpert:
             self.phase = min(self.phase + 1, len(self.PHASES) - 1)
             self.phase_steps = 0
             self.q_target = None
+            self.retreat_target = None

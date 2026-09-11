@@ -89,7 +89,7 @@ class PhysicalGraspEnv(ClothFoldEnv):
     def physical_grasp(self, prefix):
         if not self._gripper_closed[prefix]:
             return False
-        corner = self.data.xpos[self._corner_body[prefix]]
+        corner = self.data.xpos[self._corner_body[prefix][0]]
         pinch = self.pinch_point(prefix)
         return bool(np.linalg.norm(corner - pinch) < PINCH_RADIUS
                     and corner[2] - pinch[2] > PINCH_MIN_DZ)

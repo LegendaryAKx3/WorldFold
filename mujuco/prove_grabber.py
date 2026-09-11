@@ -117,7 +117,7 @@ class GrabberDemo:
         self.p = "left_"
         self.site_id = self.env._site_id[self.p]
         self.grip_act = self.env._gripper_act[self.p]
-        self.corner_bid = self.env._corner_body[self.p]
+        self.corner_bid = self.env._corner_body[self.p][0]
         self.weld_id = self.env._weld_id[self.p]
 
     def run_to(self, target, grip, steps):
