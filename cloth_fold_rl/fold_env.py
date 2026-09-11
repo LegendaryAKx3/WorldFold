@@ -56,9 +56,14 @@ CLOTH_JITTER = 0.025     # +-2.5 cm random cloth offset per episode (see __init_
 class SingleCornerFoldEnv(gym.Wrapper):
     """One arm folds one corner across the cloth. See module docstring."""
 
+    # the weld env can only hold the corner at the goal while welded, so success
+    # requires an active grasp. physical_env.py relaxes this: a corner set down
+    # on its target is a fold whether or not the jaw is still pinching it.
+    SUCCESS_NEEDS_GRASP = True
+
     def __init__(self, max_episode_steps=200, single_arm=True, seed=None,
-                 cloth_jitter=CLOTH_JITTER):
-        env = ClothFoldEnv(
+                 cloth_jitter=CLOTH_JITTER, base_env=None):
+        env = base_env if base_env is not None else ClothFoldEnv(
             observation_mode="state",
             action_mode="joint_delta",
             max_episode_steps=max_episode_steps,
@@ -110,6 +115,10 @@ class SingleCornerFoldEnv(gym.Wrapper):
         """1.0 = corner is on its target, 0.0 = corner has not moved at all."""
         return float(np.clip(1.0 - self._corner_to_goal() / self._start_dist, 0.0, 1.0))
 
+    def _goal_for(self, corners0):
+        """Where the moving corner has to go: the mirror corner's start (edge fold)."""
+        return corners0[GOAL_CORNER].copy()
+
     # ---- reward -----------------------------------------------------------
 
     def _potential(self):
@@ -132,7 +141,7 @@ class SingleCornerFoldEnv(gym.Wrapper):
 
         corners0 = self._corners()
         self._anchors0 = corners0
-        self._goal = corners0[GOAL_CORNER].copy()
+        self._goal = self._goal_for(corners0)
         self._start_dist = max(float(np.linalg.norm(corners0[MOVING_CORNER] - self._goal)), 1e-6)
 
         self._grasped = False
@@ -167,7 +176,7 @@ class SingleCornerFoldEnv(gym.Wrapper):
         reward -= CTRL_COST * float(np.square(action).sum())
 
         d = self._corner_to_goal()
-        placed = grasp and d < SUCCESS_DIST
+        placed = d < SUCCESS_DIST and (grasp or not self.SUCCESS_NEEDS_GRASP)
         self._success_steps = self._success_steps + 1 if placed else 0
 
         terminated = False
@@ -197,10 +206,29 @@ class SingleCornerFoldEnv(gym.Wrapper):
         return self._flat.observation(obs), float(reward), terminated, truncated, info
 
 
-def make_env(max_episode_steps=200, seed=None):
+def make_fold_env(physical=False, **kw):
+    """The task env: weld-cheat grasp (default) or the physical grabber."""
+    if kw.get("max_episode_steps") is None:
+        kw.pop("max_episode_steps", None)        # let each env apply its own default
+    if physical:
+        from cloth_fold_rl.physical_env import SingleCornerPhysicalFoldEnv
+        return SingleCornerPhysicalFoldEnv(**kw)
+    return SingleCornerFoldEnv(**kw)
+
+
+def make_expert(env, physical=False, seed=0):
+    """The scripted expert matching make_fold_env(physical)."""
+    if physical:
+        from cloth_fold_rl.physical_expert import ScoopExpert
+        return ScoopExpert(env, seed=seed)
+    from cloth_fold_rl.expert import FoldExpert
+    return FoldExpert(env, seed=seed)
+
+
+def make_env(max_episode_steps=200, seed=None, physical=False):
     """Factory for SB3 vec envs."""
     def _init():
-        env = SingleCornerFoldEnv(max_episode_steps=max_episode_steps)
+        env = make_fold_env(physical, max_episode_steps=max_episode_steps)
         if seed is not None:
             env.reset(seed=seed)
         return env

@@ -17,13 +17,13 @@ from pathlib import Path
 import numpy as np
 
 
-def rollout(seed: int):
+def rollout(job):
     """One expert episode. Returns (obs, actions, success). Runs in a worker."""
-    from cloth_fold_rl.fold_env import SingleCornerFoldEnv
-    from cloth_fold_rl.expert import FoldExpert
+    seed, physical, max_steps = job
+    from cloth_fold_rl.fold_env import make_fold_env, make_expert
 
-    env = SingleCornerFoldEnv()
-    expert = FoldExpert(env, seed=seed)
+    env = make_fold_env(physical, max_episode_steps=max_steps)
+    expert = make_expert(env, physical, seed=seed)
     obs, _ = env.reset(seed=seed)
     expert.reset()
 
@@ -46,8 +46,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=200)
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--out", default="outputs/cloth_fold_rl/demos.npz")
+    ap.add_argument("--out", default=None,
+                    help="default outputs/cloth_fold_rl[/physical]/demos.npz")
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
     args = ap.parse_args()
+    if args.out is None:
+        args.out = ("outputs/cloth_fold_rl/physical/demos.npz" if args.physical
+                    else "outputs/cloth_fold_rl/demos.npz")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +63,8 @@ def main():
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
         results = []
-        for i, r in enumerate(pool.imap_unordered(rollout, range(args.episodes))):
+        for i, r in enumerate(pool.imap_unordered(
+                rollout, [(s, args.physical, args.max_episode_steps) for s in range(args.episodes)])):
             results.append(r)
             if (i + 1) % 20 == 0:
                 ok = sum(x[2] for x in results)

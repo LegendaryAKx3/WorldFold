@@ -22,25 +22,26 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecMonitor
 
-from cloth_fold_rl.fold_env import SingleCornerFoldEnv
+from cloth_fold_rl.fold_env import make_fold_env
 
 
-def _make(max_episode_steps):
+def _make(max_episode_steps, physical=False):
     def _init():
-        return SingleCornerFoldEnv(max_episode_steps=max_episode_steps)
+        return make_fold_env(physical, max_episode_steps=max_episode_steps)
     return _init
 
 
-def build_vec_env(n_envs, max_episode_steps):
-    fns = [_make(max_episode_steps) for _ in range(n_envs)]
+def build_vec_env(n_envs, max_episode_steps, physical=False):
+    fns = [_make(max_episode_steps, physical) for _ in range(n_envs)]
     # spawn: MuJoCo + macOS do not survive fork
     vec = SubprocVecEnv(fns, start_method="spawn") if n_envs > 1 else DummyVecEnv(fns)
     return VecMonitor(vec)
 
 
-def evaluate(model, n_episodes=6, max_episode_steps=200, seed0=1000):
+def evaluate(model, n_episodes=6, max_episode_steps=None, seed0=1000, physical=False):
     """Deterministic rollouts on seeds the policy never trained on."""
-    env = SingleCornerFoldEnv(max_episode_steps=max_episode_steps)
+    env = make_fold_env(physical, max_episode_steps=max_episode_steps)
+    max_episode_steps = env.unwrapped.max_episode_steps
     successes, scores, grasps, rewards = 0, [], 0, []
     for i in range(n_episodes):
         obs, info = env.reset(seed=seed0 + i)
@@ -70,7 +71,8 @@ def main():
     ap.add_argument("--rounds", type=int, default=8)
     ap.add_argument("--steps-per-round", type=int, default=25_000)
     ap.add_argument("--n-envs", type=int, default=8)
-    ap.add_argument("--max-episode-steps", type=int, default=200)
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
     ap.add_argument("--eval-episodes", type=int, default=6)
     ap.add_argument("--run-dir", default="outputs/cloth_fold_rl/run1")
     ap.add_argument("--init-from", default=None,
@@ -79,6 +81,7 @@ def main():
                          "into a new task variant.")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--ent-coef", type=float, default=0.005)
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
     args = ap.parse_args()
 
     run = Path(args.run_dir)
@@ -91,7 +94,7 @@ def main():
     best = max((h["eval"]["success_rate"] for h in history), default=-1.0)
     start_round = len(history)
 
-    vec = build_vec_env(args.n_envs, args.max_episode_steps)
+    vec = build_vec_env(args.n_envs, args.max_episode_steps, args.physical)
 
     if latest.exists():
         print(f"resuming from {latest} (completed rounds: {start_round})")
@@ -118,7 +121,8 @@ def main():
                     reset_num_timesteps=False, tb_log_name="ppo")
         model.save(latest)
 
-        ev = evaluate(model, args.eval_episodes, args.max_episode_steps)
+        ev = evaluate(model, args.eval_episodes, args.max_episode_steps,
+                      physical=args.physical)
         dt = time.perf_counter() - t0
         print(f"round {rnd + 1}: success {ev['success_rate']:.0%}  "
               f"grasp {ev['grasp_rate']:.0%}  fold_score {ev['mean_fold_score']:.3f}  "

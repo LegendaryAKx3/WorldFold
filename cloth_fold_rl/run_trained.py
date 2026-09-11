@@ -18,8 +18,7 @@ from pathlib import Path
 import numpy as np
 import mjviser
 
-from cloth_fold_rl.fold_env import SingleCornerFoldEnv, SUCCESS_DIST
-from cloth_fold_rl.expert import FoldExpert
+from cloth_fold_rl.fold_env import make_fold_env, make_expert, SUCCESS_DIST
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mujuco"))
@@ -30,17 +29,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--policy", choices=["ppo", "expert"], default="ppo")
     ap.add_argument("--checkpoint", default="outputs/cloth_fold_rl/run1/best.zip")
-    ap.add_argument("--max-episode-steps", type=int, default=200)
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
     args = ap.parse_args()
 
-    env = SingleCornerFoldEnv(max_episode_steps=args.max_episode_steps)
+    env = make_fold_env(args.physical, max_episode_steps=args.max_episode_steps)
     base = env.unwrapped
 
     expert = None
     model = None
     if args.policy == "expert":
-        expert = FoldExpert(env)
-        label = "scripted expert"
+        expert = make_expert(env, args.physical)
+        label = "scripted expert" + (" (physical grasp)" if args.physical else "")
     else:
         ckpt = Path(args.checkpoint)
         if not ckpt.exists():
