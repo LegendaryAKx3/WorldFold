@@ -15,14 +15,18 @@ CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2   # cloth spans +-0.
 
 # SO101 arm model
 ARM_XML_PATH          = os.path.join(os.path.dirname(so101_nexus.__file__), "assets", "SO101", "so101_new_calib.xml")
-# Side-by-side on the -y (south) edge of the table, both facing +y (into the
-# cloth) instead of the old diagonal-corner placement. Bases are 0.44m apart
-# in x (0.22m either side of center) and 0.24m south of the cloth edge -- the
-# spacing that puts BOTH near-edge corners (cloth_0, cloth_110) inside BOTH
-# arms' reach at once (see cloth_fold_rl/README.md's reachability table,
-# re-measured for this geometry via the same 40k-sample FK sweep method).
-ARM_BASE_LEFT         = (-0.22, -(CLOTH_HALF + 0.09), TABLE_TOP_Z)
-ARM_BASE_RIGHT        = ( 0.22, -(CLOTH_HALF + 0.09), TABLE_TOP_Z)
+# Side-by-side south of the cloth, both facing +y (north, into the cloth),
+# instead of the old diagonal-corner placement. Bases are 0.44m apart in x
+# (0.22m either side of center), sit 0.15m south of the cloth's south edge, and
+# are raised 0.06m above the table top. The extra south set-back and the raised
+# mount matter: with bases at table height right at the edge, reaching the near
+# south corners (the stage-1 grasp points, only ~9cm away) drove the wrist down
+# into the table and jammed the arm; from further back and higher the arm comes
+# down onto every corner from above. All four fold corners plus the stage-1
+# centre goals stay in reach from here (see cloth_fold_rl/README.md's
+# reachability table, re-measured via the same 40k-sample FK sweep method).
+ARM_BASE_LEFT         = (-0.22, -(CLOTH_HALF + 0.15), TABLE_TOP_Z + 0.06)
+ARM_BASE_RIGHT        = ( 0.22, -(CLOTH_HALF + 0.15), TABLE_TOP_Z + 0.06)
 # both arms rotated 90 deg about z from their zero pose, so "local +x" (the
 # old left arm's stock forward direction) points world +y, i.e. north into
 # the cloth from the south edge. Both bases use this SAME quat now -- there is

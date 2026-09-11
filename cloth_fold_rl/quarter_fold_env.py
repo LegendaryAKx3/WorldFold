@@ -5,29 +5,32 @@ its own.
 A wrapper around ClothFoldEnv in the style of fold_env.SingleCornerFoldEnv,
 with two stages. Corner positions at reset: cloth_0 (-h, -h), cloth_10
 (-h, +h), cloth_110 (+h, -h), cloth_120 (+h, +h), h = 0.15 m. Both arms sit
-side-by-side on the south (-y) table edge (see mujuco/sim_main.py's
-ARM_BASE_LEFT/RIGHT), which puts both south corners (cloth_0, cloth_110)
-inside BOTH arms' reach -- unlike the old diagonal placement, where only one
-arm could ever reach the far corner of a two-layer stack.
+side-by-side south of the cloth (see mujuco/sim_main.py's ARM_BASE_LEFT/RIGHT),
+each reaching its own near south corner -- unlike the old diagonal placement,
+where the two arms sat at opposite corners.
 
   stage 0  the left arm carries cloth_10 onto cloth_0 and the right arm carries
            cloth_120 onto cloth_110 (a fold about y = 0); both release and the
            corners must stay placed for SETTLE_STEPS. cloth_0 and cloth_110 must
-           not be dragged.
-  stage 1  a fold about x = 0: the left arm carries cloth_10 (the corner it
-           already knows, now sitting stacked on cloth_0) onto cloth_110, and
-           the right arm carries cloth_0 onto cloth_110 too, at the same time --
-           a genuine two-arm carry of the two-layer west stack, mirroring
-           stage 0's synchronized-pair structure instead of parking one arm.
-           Both release and the corners must stay placed; cloth_110 and
-           cloth_120 must not be dragged.
+           not be dragged. This leaves a half-height sheet along the south edge
+           with a two-layer stack at each end: cloth_0+cloth_10 at the west
+           corner, cloth_110+cloth_120 at the east corner.
+  stage 1  a fold about x = 0, run as a synchronized pair mirroring stage 0
+           instead of parking one arm: the left arm grasps the west stack and
+           the right arm grasps the east stack, and both fold their side inward
+           toward the centre (goals CENTRE_W / CENTRE_E, either side of x = 0).
+           The two stacks are 0.30 m apart and the two goals ~0.12 m apart, so
+           the grippers never converge on one point. Both release and the four
+           carried corners must stay placed; the cloth centre (CENTRE) is the
+           anchor that must not be dragged.
 
-The base env welds one hard-wired vertex per gripper within 3 cm. Here each
-gripper may weld two vertices (its stage-0 corner and its stage-1 corner),
-one weld each -- see GRASP_CORNERS. The two stage-1 goals are nudged a few cm
-apart (see quarter_fold_expert.OVERSHOOT) so the two physical grippers don't
-try to occupy the same point when they converge on the same target corner;
-GRASP_RADIUS is 4 cm and SUCCESS_DIST (5 cm) tolerates that spread.
+The base env welds one hard-wired vertex per gripper within GRASP_RADIUS. Here
+each gripper's weld list holds its stage-0 corner and its stage-1 corner (see
+GRASP_CORNERS). In stage 0 an arm's two weld vertices are 0.30 m apart so only
+the near one welds; in stage 1 the arm grasps a stacked south corner, where
+both its weld vertices sit within GRASP_RADIUS, so it lifts the whole two-layer
+stack. GRASP_RADIUS is 6 cm (> SUCCESS_DIST 5 cm) so both layers still weld
+when the stage-0 fold leaves them a few cm apart.
 
 Reward: potential-based shaping summed over the stage's moves. Each move has
 three regimes, free (reach the corner) / grasped (carry it) / released and
@@ -53,13 +56,23 @@ from sim_main import CLOTH_COUNT, ClothFoldEnv, StateOnlyWrapper  # noqa: E402 (
 
 N = CLOTH_COUNT
 CLOTH_0, CLOTH_10, CLOTH_110, CLOTH_120 = 0, N - 1, (N - 1) * N, N * N - 1
-# left keeps the same corner both stages (cloth_10, grasped in stage 0 and
-# again in stage 1 once it is stacked on cloth_0); right swaps its stage-0
-# corner (cloth_120) for the stage-1 one (cloth_0). Neither arm's weld list
-# contains a vertex the OTHER arm might also be standing on at grasp time, so
-# there's no ambiguity about which gripper a stacked vertex welds to.
-GRASP_CORNERS = {"left_": (CLOTH_10,), "right_": (CLOTH_120, CLOTH_0)}
-GRASP_RADIUS = 0.04
+# Non-corner goal vertices for stage 1 (row-major index = ix*N + iy, iy = 0 is
+# the south edge). The two south corners fold inward to a point either side of
+# centre, kept apart so the two grippers never converge on one spot:
+CENTRE_W = 3 * N          # (-0.06, -0.15) south edge, west of centre
+CENTRE_E = 7 * N          # (+0.06, -0.15) south edge, east of centre
+CENTRE = (N // 2) * N + N // 2   # (0, 0) cloth centre -- the stage-1 anchor
+# Each arm welds its stage-0 corner and its stage-1 corner. In stage 0 the two
+# weld vertices of an arm are 0.30 m apart (only the near one is in range), so
+# one weld each. In stage 1 the arm grasps the stacked south corner (both its
+# own stage-1 vertex and the stage-0 vertex now folded on top of it are within
+# GRASP_RADIUS), so it lifts the whole two-layer stack on that side. The two
+# arms grasp opposite sides (west vs east, 0.30 m apart), so no shared vertex.
+GRASP_CORNERS = {"left_": (CLOTH_10, CLOTH_0), "right_": (CLOTH_120, CLOTH_110)}
+GRASP_RADIUS = 0.06      # both layers of a stacked corner weld even if the
+                         # stage-0 fold left them a few cm apart; the two arms
+                         # grasp opposite sides (0.30 m apart) so a wider radius
+                         # never lets one arm steal the other's vertex
 RELEASE_BONUS = 3.0      # potential step for letting go of a placed corner
 STAGE_BONUS = 10.0
 SETTLE_STEPS = 20        # 1.0 s released and placed before a stage completes
@@ -83,8 +96,8 @@ class Stage:
 STAGES = (
     Stage(moves=(Move("left_", (CLOTH_10,), CLOTH_0), Move("right_", (CLOTH_120,), CLOTH_110)),
           anchors=((CLOTH_0, CLOTH_0), (CLOTH_110, CLOTH_110))),
-    Stage(moves=(Move("left_", (CLOTH_10,), CLOTH_110), Move("right_", (CLOTH_0,), CLOTH_110)),
-          anchors=((CLOTH_110, CLOTH_110), (CLOTH_120, CLOTH_110))),
+    Stage(moves=(Move("left_", (CLOTH_0, CLOTH_10), CENTRE_W), Move("right_", (CLOTH_110, CLOTH_120), CENTRE_E)),
+          anchors=((CENTRE, CENTRE),)),
 )
 
 

@@ -25,11 +25,14 @@ import numpy as np
 from cloth_fold_rl.expert import FoldExpert
 from cloth_fold_rl.quarter_fold_env import STAGES, QuarterFoldEnv
 
-# per (stage, arm): metres past the goal to place the corner at. Stage 1's two
-# moves share one target corner (cloth_110); the y offsets keep the arms'
-# gripper positions a few cm apart while they carry so they don't collide.
-OVERSHOOT = {(0, "left_"): np.array([-0.04, -0.05, 0.0]), (0, "right_"): np.array([0.02, -0.05, 0.0]),
-             (1, "left_"): np.array([0.03, 0.02, 0.0]), (1, "right_"): np.array([0.03, -0.02, 0.0])}
+# per (stage, arm): metres past the goal to place the corner at (the mean
+# spring-back measured on the stock cloth). Stage 1 folds the two south corners
+# inward toward centre; a released flap springs back outward, so each arm places
+# a few cm further in (+x for the west arm, -x for the east arm). The two goals
+# sit either side of centre and the two arms approach from opposite sides, so
+# their grippers stay clear of each other.
+OVERSHOOT = {(0, "left_"): np.array([-0.04, -0.03, 0.0]), (0, "right_"): np.array([0.02, -0.03, 0.0]),
+             (1, "left_"): np.array([0.0, -0.02, 0.0]), (1, "right_"): np.array([0.0, -0.02, 0.0])}
 
 
 def corner_index(env, vertex):
