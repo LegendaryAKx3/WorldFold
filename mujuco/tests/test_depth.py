@@ -1,10 +1,6 @@
-import os
-import sys
-
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from sim_main import ClothFoldEnv, DEPTH_MAX, DEPTH_MIN, TABLE_TOP_Z, CAMERA_POS  # noqa: E402
+from mujuco.sim_main import ClothFoldEnv, DEPTH_MAX, DEPTH_MIN, TABLE_TOP_Z, CAMERA_POS
 
 def test_state_mode_has_no_depth():
     env = ClothFoldEnv(observation_mode="state")
