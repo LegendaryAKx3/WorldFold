@@ -27,8 +27,16 @@ from cloth_fold_rl.quarter_fold_env import STAGES, QuarterFoldEnv
 # per (stage, arm): metres past the goal to place the corner at (the mean
 # spring-back measured on the stock cloth). Stage 1 carries both west-edge
 # points east, so both overshoot a little further east than their goal.
+# A fixed overshoot can't track the +-30% mass/friction/damping domain
+# randomization exactly, so some episodes place a corner just outside
+# SUCCESS_DIST -- the retry loop below (measured error, MAX_RETRIES) closes
+# that last centimetre instead of a bigger fixed margin risking overshoot the
+# other way.
 OVERSHOOT = {(0, "left_"): np.array([-0.04, -0.03, 0.0]), (0, "right_"): np.array([0.02, -0.03, 0.0]),
              (1, "right_"): np.array([0.02, 0.0, 0.0]), (1, "left_"): np.array([0.02, 0.0, 0.0])}
+MAX_RETRIES = 2
+SETTLE_WAIT = 15   # steps to wait in "done" before judging placement -- the
+                    # released corner is still springing back right after release
 
 
 class QuarterFoldExpert:
@@ -36,14 +44,15 @@ class QuarterFoldExpert:
         self.env = env
         self.base = env.unwrapped
         self.experts = {}
+        self.moves = {}
         self.correction = {}
         for s, stage in enumerate(STAGES):
             for k, move in enumerate(stage.moves):
+                self.moves[(s, move.prefix)] = move
                 goal = lambda m=move, s=s: env.goal(m) + OVERSHOOT[(s, m.prefix)] + self.correction[(s, m.prefix)]
                 self.experts[(s, move.prefix)] = FoldExpert(env, seed=seed + 10 * s + k, prefix=move.prefix,
                                                             corner=list(move.corners), goal=goal, release=True,
                                                             raw_vertex=True)
-        self.retries = 0   # kept for run_episode's row dict; no retry logic anymore
         self.reset()
 
     def reset(self):
@@ -51,6 +60,8 @@ class QuarterFoldExpert:
             expert.reset()
             expert.release_allowed = False
             self.correction[key] = np.zeros(3)
+        self.retries = {key: 0 for key in self.experts}
+        self.done_steps = {key: 0 for key in self.experts}
 
     def _arms(self):
         return {p: e for (s, p), e in self.experts.items() if s == self.env.stage}
@@ -58,11 +69,29 @@ class QuarterFoldExpert:
     def phases(self):
         return {p: e.PHASES[e.phase] for p, e in self._arms().items()}
 
+    def _maybe_retry(self, key, expert):
+        if expert.PHASES[expert.phase] != "done":
+            self.done_steps[key] = 0
+            return
+        self.done_steps[key] += 1
+        if (self.done_steps[key] < SETTLE_WAIT or self.env._placed(self.moves[key])
+                or self.retries[key] >= MAX_RETRIES):
+            return
+        move = self.moves[key]
+        carried = np.mean([self.env._vertex(c) for c in move.corners], axis=0)
+        self.correction[key] += self.env.goal(move) - carried   # nudge by the measured miss
+        expert.reset()
+        self.retries[key] += 1
+        self.done_steps[key] = 0
+
     def act(self):
         arms = self._arms()
         if all(e.PHASES[e.phase] == "hold" for e in arms.values()):
             for e in arms.values():
                 e.release_allowed = True
+        for (s, p), expert in self.experts.items():
+            if s == self.env.stage:
+                self._maybe_retry((s, p), expert)
         return np.concatenate([arms["left_"].act(), arms["right_"].act()])
 
 
@@ -81,7 +110,7 @@ def run_episode(env, expert, seed, verbose=True):
         if terminated or truncated:
             break
     return {"seed": seed, "steps": t + 1, "reward": round(total, 2), "fold_score": round(info["fold_score"], 3),
-            "stage": info["stage"], "retries": expert.retries, "success": info["success"],
+            "stage": info["stage"], "retries": sum(expert.retries.values()), "success": info["success"],
             "reason": info["termination_reason"] or "truncated", "anchor_drift": round(info["anchor_drift"], 3)}
 
 
