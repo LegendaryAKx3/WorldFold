@@ -156,3 +156,80 @@ python -m cloth_fold_rl.run_trained --policy expert    # scripted expert
 Measured on an M4 (10 cores): **9.0 control steps/sec** single-env — 100 physics
 substeps per control step, 375 DOF, plus a 1.8 s settle per reset. About 45/sec
 across 8 subprocess envs, so **1M steps ≈ 6 hours**. Budget accordingly.
+
+## Physical grasp (no weld cheat)
+
+Everything above fakes the grasp with a weld. `--physical` runs the same
+pipeline on the grabber from `mujuco/prove_grabber.py`: scoop ramp + paddle
+plates on the SO101 jaws, weld never engaged, holding the cloth is contact and
+friction only. Code: `physical_env.py` (env), `physical_expert.py` (scripted
+scoop-pinch-carry expert). Every script takes `--physical`; outputs go to
+`outputs/cloth_fold_rl/physical/`.
+
+```bash
+python -m cloth_fold_rl.prove_feasible --physical --episodes 4
+python -m cloth_fold_rl.collect_demos --physical --episodes 200 --workers 8
+python -m cloth_fold_rl.bc --physical --epochs 30
+python -m cloth_fold_rl.train --physical --run-dir outputs/cloth_fold_rl/physical/run1 \
+    --init-from outputs/cloth_fold_rl/physical/bc.zip --rounds 4
+python -m cloth_fold_rl.record_video --physical --checkpoint outputs/cloth_fold_rl/physical/run1/best.zip
+```
+
+**Pin MuJoCo 3.10.0 for this** (the repo-root `requirements.txt`, not this
+directory's). The grabber proof passes on 3.10.0 and fails on 3.11.0 with
+either so101-nexus version: on 3.11 the cloth settles ~1 cm above the table
+instead of on it, the ramp no longer gets under the corner, and the jaw ejects
+it on closing. The weld checkpoints above are the only thing that needs 3.11.
+
+### What is different from the weld task, and why
+
+Three measured facts about the SO101 + plates forced three changes:
+
+1. **Grasp signal.** The weld flag (reward potential, success test, one proprio
+   observation slot) is replaced by a physical one: jaw commanded closed AND the
+   corner within 3 cm of the ramp/paddle pocket and not lying under it. Success
+   no longer requires the flag -- a corner set down on its target is a fold.
+2. **Cloth placed 2 cm further from the left arm** (`CLOTH_SHIFT`, jitter kept).
+   The scoop posture has `shoulder_lift` on its joint limit with the arm
+   stretched low; for corners closer than ~15 cm to the arm base the gripper
+   body self-collides with the shoulder body (36 N contact, elbow and wrist
+   servos saturated at 3.35 N m) and the ramp stops ~1 cm above the table. The
+   +-2.5 cm jitter reached that region for half the episodes.
+3. **Fold goal at half the edge fold** (`FOLD_FRACTION = 0.5`, 0.15 m carry).
+   The pocket only holds while the jaw keeps its grasp-time tilt, and with
+   that orientation held the 5-DOF arm cannot track the carry line past
+   x = +0.10 m (kinematic probe: 12 mm error at 80% of the full fold, 55-77 mm
+   at the goal). Position-only tracking reaches the goal but rotates the jaw
+   30-50 deg, which dumps the corner around x = 0. Set `FOLD_FRACTION = 1.0`
+   to get the weld task's goal back.
+
+Episodes are 250 steps (the approach needs ~50 more than the weld task).
+
+### Expert
+
+`ScoopExpert` ports the proof's routine to joint-delta actions:
+hover -> down -> slide -> close -> lift -> carry -> place -> hold. Two IK
+details matter. The approach phases use position-only DLS with a nullspace
+pull toward the proof's scoop posture (`Q_SCOOP`), because the ramp is bolted
+to the gripper and a free wrist puts its leading edge in the table or in the
+air. The carry uses a 6-DoF tracker holding the grasp-time tilt (yaw free), on
+a rate-limited target that only advances while the arm keeps up -- the first
+version let the IK swap arm configuration mid-carry and yanked the corner out.
+The slide is the proof's profile (5 mm target hops, then hold): a smooth creep
+at the same average speed shoves the cloth along the table instead of
+scooping it. Note `mju_subQuat` returns the rotation error in the site's local
+frame while `mj_jacSite` is in world frame; the env's own `ik_substep` stacks
+them without rotating, which is part of why it stalls.
+
+### Results
+
+| stage | result |
+|---|---|
+| feasibility gate (4 seeds) | 3/4 success, grasp rate 100%, best fold_score 0.813 |
+| expert demos (200 episodes) | 70 successes (35%), 10,161 transitions |
+| BC policy (6 held-out seeds) | _see below_ |
+| PPO fine-tune | _see below_ |
+
+The expert's 35% over the full jitter box (vs 3/4 on the gate seeds) is the
+scoop: the corner either rides the ramp within a few hops or gets pushed ahead
+of it, and the carry drops it if the cloth tension peaks before the goal.

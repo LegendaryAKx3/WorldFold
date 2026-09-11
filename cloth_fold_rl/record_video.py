@@ -16,8 +16,7 @@ import numpy as np
 import mujoco
 from PIL import Image, ImageDraw, ImageFont
 
-from cloth_fold_rl.fold_env import SingleCornerFoldEnv, SUCCESS_DIST
-from cloth_fold_rl.expert import FoldExpert
+from cloth_fold_rl.fold_env import make_fold_env, make_expert, SUCCESS_DIST
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -57,14 +56,17 @@ def main():
     ap.add_argument("--camera", default="main")
     ap.add_argument("--fps", type=int, default=20)   # control_dt=0.05 -> real time
     ap.add_argument("--hold-frames", type=int, default=25)  # freeze on the result
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
     args = ap.parse_args()
 
-    env = SingleCornerFoldEnv()
+    env = make_fold_env(args.physical, max_episode_steps=args.max_episode_steps)
     base = env.unwrapped
 
     if args.policy == "expert":
-        agent = FoldExpert(env)
-        label = "scripted expert"
+        agent = make_expert(env, args.physical)
+        label = "scripted expert" + (" (physical grasp)" if args.physical else "")
         act = lambda obs: agent.act()          # noqa: E731
     else:
         from stable_baselines3 import PPO
@@ -73,7 +75,7 @@ def main():
             raise SystemExit(f"no checkpoint at {ckpt}")
         model = PPO.load(ckpt)
         agent = None
-        label = f"PPO ({ckpt.name})"
+        label = f"PPO ({ckpt.name})" + (" physical grasp" if args.physical else "")
         act = lambda obs: model.predict(obs, deterministic=True)[0]   # noqa: E731
 
     renderer = mujoco.Renderer(base.model, height=args.height, width=args.width)

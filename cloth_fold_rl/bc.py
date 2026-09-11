@@ -27,7 +27,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from cloth_fold_rl.fold_env import SingleCornerFoldEnv
+from cloth_fold_rl.fold_env import make_fold_env
 
 
 def action_mean(policy, obs):
@@ -41,14 +41,20 @@ def action_mean(policy, obs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--demos", default="outputs/cloth_fold_rl/demos.npz")
-    ap.add_argument("--out", default="outputs/cloth_fold_rl/bc.zip")
+    ap.add_argument("--demos", default=None)
+    ap.add_argument("--out", default=None)
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--init-std", type=float, default=0.25)
     ap.add_argument("--eval-episodes", type=int, default=6)
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
     args = ap.parse_args()
+    root = "outputs/cloth_fold_rl/physical" if args.physical else "outputs/cloth_fold_rl"
+    args.demos = args.demos or f"{root}/demos.npz"
+    args.out = args.out or f"{root}/bc.zip"
 
     d = np.load(args.demos)
     obs_np, act_np = d["obs"], d["actions"]
@@ -62,7 +68,7 @@ def main():
     acts = torch.as_tensor(act_np, dtype=torch.float32)
 
     # same architecture/hyperparams as train.py, so the zip loads cleanly there
-    venv = DummyVecEnv([lambda: SingleCornerFoldEnv()])
+    venv = DummyVecEnv([lambda: make_fold_env(args.physical, max_episode_steps=args.max_episode_steps)])
     model = PPO("MlpPolicy", venv, verbose=0, seed=0,
                 learning_rate=3e-4, n_steps=512, batch_size=256, n_epochs=10,
                 gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.005,
@@ -99,7 +105,8 @@ def main():
 
     # does the cloned policy actually fold?
     from cloth_fold_rl.train import evaluate
-    ev = evaluate(model, n_episodes=args.eval_episodes)
+    ev = evaluate(model, n_episodes=args.eval_episodes, max_episode_steps=args.max_episode_steps,
+                  physical=args.physical)
     print(f"\n=== BC policy, varied starts ===")
     print(f"success {ev['success_rate']:.0%}  grasp {ev['grasp_rate']:.0%}  "
           f"fold_score {ev['mean_fold_score']:.3f}  reward {ev['mean_reward']:.2f}")

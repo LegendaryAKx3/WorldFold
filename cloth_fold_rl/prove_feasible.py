@@ -11,8 +11,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 
-from cloth_fold_rl.fold_env import SingleCornerFoldEnv, SUCCESS_DIST
-from cloth_fold_rl.expert import FoldExpert
+from cloth_fold_rl.fold_env import make_fold_env, make_expert, SUCCESS_DIST
 
 
 def run_episode(env, expert, seed, verbose=True):
@@ -32,7 +31,7 @@ def run_episode(env, expert, seed, verbose=True):
         if verbose and t % 25 == 0:
             print(f"  t{t:3d} {expert.PHASES[expert.phase]:<9} "
                   f"score {info['fold_score']:.3f}  d_goal {info['corner_to_goal']:.3f}  "
-                  f"grasp {int(info['grasped'])}")
+                  f"grasp {int(info['grasped'])}  lift {info.get('corner_lift', 0):+.3f}")
         if terminated or truncated:
             break
 
@@ -53,10 +52,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=3)
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--physical", action="store_true", help="use the physical grabber (plates, no weld) -- see physical_env.py")
+    ap.add_argument("--max-episode-steps", type=int, default=None,
+                    help="default 200 (weld) / 250 (physical)")
     args = ap.parse_args()
 
-    env = SingleCornerFoldEnv()
-    expert = FoldExpert(env)
+    env = make_fold_env(args.physical, max_episode_steps=args.max_episode_steps)
+    expert = make_expert(env, args.physical)
 
     rows = []
     for ep in range(args.episodes):
