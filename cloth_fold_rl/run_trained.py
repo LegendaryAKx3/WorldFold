@@ -24,6 +24,17 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mujuco"))
 from sim_main import make_render_fn  # noqa: E402
 
+def print_depth(base):
+    # this just prints out the depth for u to compare and contrast with the actual world depth
+    _, depth = base._render_image()
+    d = depth[:, :, 0]
+    valid = d[d > 0]
+    if valid.size == 0:
+        print("depth: no valid pixels")
+        return
+    center = d[d.shape[0] // 2, d.shape[1] // 2]
+    print(f"depth: valid {100 * valid.size / d.size:5.1f}%  min {valid.min():.3f}  "
+          f"max {valid.max():.3f}  mean {valid.mean():.3f}  center {center:.3f} m")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -74,6 +85,7 @@ def main():
             obs, r, term, trunc, info = env.step(action)
             state.update(obs=obs, last=dict(info))
             state["reward"] += r
+            print_depth(base)
             if term or trunc:
                 state["result"] = (
                     "SUCCESS" if info["success"]
@@ -117,7 +129,6 @@ def main():
     print(f"running {label} -- open the viewer URL below")
     mjviser.Viewer(base.model, base.data, step_fn=step_fn, reset_fn=reset_fn,
                    render_fn=render_fn).run()
-
 
 if __name__ == "__main__":
     main()
