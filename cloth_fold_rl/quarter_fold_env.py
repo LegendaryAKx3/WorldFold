@@ -119,6 +119,7 @@ class QuarterFoldEnv(gym.Wrapper):
         self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(ACTION_DIM,), dtype=np.float32)
         self.stage = 0
         self._start = None          # cloth vertex positions at reset, [N*N, 3]
+        self._stage_start = None    # cloth vertex positions at the current stage's start
         self._settle_steps = 0
         self._prev_potential = 0.0
 
@@ -129,6 +130,17 @@ class QuarterFoldEnv(gym.Wrapper):
 
     def goal(self, move):
         return self._start[move.goal]
+
+    def _apply_weld_mask(self):
+        # Each arm may weld only the corners it is meant to carry this stage.
+        # CLOTH_10 lives in both arms' grasp_corners (left carries it in stage 0,
+        # the right-arm stack includes it in stage 1); without this mask the left
+        # arm welds CLOTH_10 along with CLOTH_5 at the stage-1 grasp and drags it
+        # to the wrong goal, so the right arm's stack never places.
+        mask = {p: set() for p in self.env.prefixes}
+        for move in STAGES[self.stage].moves:
+            mask[move.prefix].update(move.corners)
+        self.env.weld_mask = mask
 
     def _grasped(self, prefix):
         return self.env.grasp_active(prefix)
@@ -144,7 +156,12 @@ class QuarterFoldEnv(gym.Wrapper):
         return max(float(np.mean([np.linalg.norm(self._start[c] - self.goal(move)) for c in move.corners])), 1e-6)
 
     def _anchor_drift(self):
-        return max(float(np.linalg.norm(self._vertex(v) - self._start[ref])) for v, ref in STAGES[self.stage].anchors)
+        # reference is the vertex's position at the START of the current stage,
+        # not at reset: an anchor corner may have been legitimately relocated by
+        # an earlier stage (e.g. CLOTH_120 is folded onto CLOTH_110 in stage 0,
+        # ~0.30 m from its reset pose). What must not move is the already-placed
+        # cloth as THIS stage runs, so we measure drift from the stage's start.
+        return max(float(np.linalg.norm(self._vertex(v) - self._stage_start[ref])) for v, ref in STAGES[self.stage].anchors)
 
     def fold_score(self):
         """Fraction of the two stages' total carry distance that has been covered."""
@@ -182,7 +199,9 @@ class QuarterFoldEnv(gym.Wrapper):
             opts["cloth_pose"] = self._rng.uniform(-self.cloth_jitter, self.cloth_jitter, size=2)
         obs, info = self.env.reset(seed=seed, options=opts)
         self._start = self.env.data.xpos[self.env._cloth_body_ids].copy()
+        self._stage_start = self._start.copy()
         self.stage = 0
+        self._apply_weld_mask()
         self._settle_steps = 0
         self._prev_potential = self._potential()
         info = dict(info)
@@ -218,6 +237,8 @@ class QuarterFoldEnv(gym.Wrapper):
             else:
                 reward += STAGE_BONUS
                 self.stage += 1
+                self._stage_start = self.env.data.xpos[self.env._cloth_body_ids].copy()
+                self._apply_weld_mask()
                 self._settle_steps = 0
                 potential = self._potential()
         elif self._anchor_drift() > DRAG_LIMIT:

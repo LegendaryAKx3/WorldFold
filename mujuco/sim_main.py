@@ -158,6 +158,13 @@ class ClothFoldEnv(gym.Env):
             gripper_actuator = self.model.actuator(f"{prefix}gripper")
             self._gripper_act[prefix] = gripper_actuator.id
         self._weld_id = {p: ids[0] for p, ids in self._weld_ids.items()}   # primary weld, for the viewer
+        # optional per-prefix allow-list of cloth vertex indices eligible to weld
+        # right now. None (the default) means every vertex in grasp_corners is
+        # eligible -- unchanged behaviour. A multi-stage wrapper can narrow it per
+        # stage so an arm only grabs the corner it is meant to carry (see
+        # quarter_fold_env, where CLOTH_10 is in both arms' grasp_corners and would
+        # otherwise be hijacked by the wrong arm mid-task).
+        self.weld_mask = {p: None for p in self.prefixes}
 
         # cloth vertices are bodies cloth_0 .. cloth_(N*N-1) (row-major grid)
         n_vert = CLOTH_COUNT * CLOTH_COUNT
@@ -440,8 +447,11 @@ class ClothFoldEnv(gym.Env):
         if self._gripper_closed[prefix]:
             self.data.ctrl[act_id] = GRIPPER_CLOSED
             site = self.data.site_xpos[self._site_id[prefix]]
-            for eqid, corner_body in zip(self._weld_ids[prefix], self._corner_body[prefix]):
+            allowed = self.weld_mask.get(prefix)
+            for vtx, eqid, corner_body in zip(self.grasp_corners[prefix], self._weld_ids[prefix], self._corner_body[prefix]):
                 if self.data.eq_active[eqid] != 0:
+                    continue
+                if allowed is not None and vtx not in allowed:
                     continue
                 gap = float(np.linalg.norm(site - self.data.xpos[corner_body]))
                 if gap < self.grasp_radius:
