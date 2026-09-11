@@ -44,6 +44,14 @@ QACC_LIMIT           = 1e5
 TASK_NAMES           = ["fold", "drop", "push", "drag"]   # index = task id (one-hot slot)
 
 # for repositioning the cam
+# Depth sensor model (RealSense D435-ish). Depth comes from the renderer's z-buffer,
+# never from body/vertex positions, so the policy only sees what a real camera would.
+DEPTH_MIN            = 0.2      # m; closer reads as 0 (invalid), like real drivers
+DEPTH_MAX            = 3.0      # m; farther reads as 0
+DEPTH_NOISE_STD_1M   = 0.002    # m std at 1m; grows with depth^2
+DEPTH_QUANT_1M       = 0.001    # m resolution at 1m; grows with depth^2
+DEPTH_EDGE_JUMP      = 0.05     # m per pixel; steeper depth edges become holes (grazing angle / occlusion)
+
 # CAMERA_POS           = (1, 5, 1)
 CAMERA_POS           = (0.75, -0.75, 0.75)
 CAMERA_TARGET        = (0.0, 0.0, TABLE_TOP_Z)  # aim point 
@@ -104,6 +112,8 @@ class ClothFoldEnv(gym.Env):
             spaces["cloth_state"] = gym.spaces.Box(-np.inf, np.inf, shape=(C,), dtype=np.float32)
         if self._use_image:
             spaces["image"] = gym.spaces.Box(0, 255, shape=img_shape, dtype=np.uint8)
+            # depth in metres, one channel per camera; 0 = invalid pixel
+            spaces["depth"] = gym.spaces.Box(0.0, DEPTH_MAX, shape=(H, W, len(self.camera_names)), dtype=np.float32)
         self.observation_space = gym.spaces.Dict(spaces)
         self._renderer = None   # lazily created on first image render
 
@@ -202,16 +212,36 @@ class ClothFoldEnv(gym.Env):
             return True
         return False
 
+    def _sensor_depth(self, raw):
+        depth = raw.astype(np.float32)
+        scale = depth * depth
+        noise = self.np_random.normal(0.0, DEPTH_NOISE_STD_1M, depth.shape).astype(np.float32)
+        depth = depth + noise * scale
+        step = DEPTH_QUANT_1M * scale
+        depth = np.round(depth / step) * step
+        dy, dx = np.gradient(raw)
+        edge = np.hypot(dx, dy) > DEPTH_EDGE_JUMP
+        invalid = (depth < DEPTH_MIN) | (depth > DEPTH_MAX) | edge
+        depth[invalid] = 0.0
+        return depth
+
     def _render_image(self):
-        # stacked RGB: each camera's (H,W,3) concatenated along the channel axis
+        # image: each camera's (H,W,3) RGB concatenated along the channel axis
+        # depth: each camera's (H,W) sensor depth stacked along the channel axis
         if self._renderer is None:
             H, W = self.image_size
             self._renderer = mujoco.Renderer(self.model, height=H, width=W)
         frames = []
+        depths = []
         for cam in self.camera_names:
             self._renderer.update_scene(self.data, camera=cam)
             frames.append(self._renderer.render())
-        return np.concatenate(frames, axis=2).astype(np.uint8)
+            self._renderer.enable_depth_rendering()
+            depths.append(self._sensor_depth(self._renderer.render()))
+            self._renderer.disable_depth_rendering()
+        image = np.concatenate(frames, axis=2).astype(np.uint8)
+        depth = np.stack(depths, axis=2).astype(np.float32)
+        return image, depth
 
     def _get_obs(self):
         # proprio (per arm): joint pos(5) + joint vel(5) + gripper(1) + EE pose(7) + EE vel(6) + grasp(1)
@@ -253,7 +283,7 @@ class ClothFoldEnv(gym.Env):
             obs["cloth_state"] = np.concatenate([corners.ravel(), cvel.ravel(), samples.ravel(),
                                                  com, height, to_goal.ravel()]).astype(np.float32)
         if self._use_image:
-            obs["image"] = self._render_image()
+            obs["image"], obs["depth"] = self._render_image()
 
         return obs
 
