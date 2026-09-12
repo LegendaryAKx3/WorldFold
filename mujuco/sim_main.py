@@ -50,9 +50,20 @@ DEPTH_NOISE_STD_1M   = 0.002    # m
 DEPTH_QUANT_1M       = 0.001    # m 
 DEPTH_GRAZING_DEG    = 80.0     # surfaces tilted past this from the view ray become holes 
 
-# CAMERA_POS           = (1, 5, 1)
-CAMERA_POS           = (0.75, -0.75, 0.75)
-CAMERA_TARGET        = (0.0, 0.0, TABLE_TOP_Z)  # aim point 
+CAMERA_POS              = (0.75, -0.75, 0.75)
+CAMERA_TARGET           = (0.0, 0.0, TABLE_TOP_Z)  # aim point
+
+# Camera placement sweep. test_calibrate_camera() scores each candidate by how well the
+# depth sensor reads the cloth vertices, writes the winner to BEST_POS and prints it, so
+# CAMERA_POS can be updated by hand. TESTING_MODE renders from BEST_POS instead of CAMERA_POS.
+CANDIDATE_POSITIONS     = []            # empty = spherical grid around CAMERA_TARGET (see default_candidates)
+CANDIDATE_RADII         = (0.6, 0.8, 1.0, 1.2)
+CANDIDATE_ELEV_DEG      = (25.0, 40.0, 55.0, 70.0)
+CANDIDATE_N_AZIMUTH     = 8
+DEPTH_HOLE_PENALTY      = 0.05          # m charged per cloth vertex that is out of frame or reads as a hole
+BEST_POS                = CAMERA_POS
+TESTING_MODE            = True
+
 
 class ClothFoldEnv(gym.Env):
 
@@ -215,6 +226,58 @@ class ClothFoldEnv(gym.Env):
             return True
         return False
 
+    def move_camera(self, pos, cam="main"):
+        cid = self.model.camera(cam).id
+        right, up = camera_axes(pos, CAMERA_TARGET)
+        forward = np.cross(up, right)
+        rot = np.column_stack([right, up, -forward])  
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, rot.ravel())
+        self.model.cam_pos[cid] = pos
+        self.model.cam_quat[cid] = quat
+        mujoco.mj_forward(self.model, self.data)
+
+    def _cloth_depth_error(self, depth, cam="main"):
+        cid = self.model.camera(cam).id
+        cam_pos = self.data.cam_xpos[cid]
+        rot = self.data.cam_xmat[cid].reshape(3, 3)
+        H, W = depth.shape
+        f = (H / 2.0) / np.tan(np.radians(self.model.cam_fovy[cid]) / 2.0)
+        errors = []
+        for body_id in self._cloth_body_ids:
+            p = rot.T @ (self.data.xpos[body_id] - cam_pos)
+            true_depth = -p[2]
+            if true_depth <= 0:
+                errors.append(DEPTH_HOLE_PENALTY)
+                continue
+            px = int(f * p[0] / true_depth + W / 2.0)
+            py = int(-f * p[1] / true_depth + H / 2.0)
+            if px < 0 or px >= W or py < 0 or py >= H:
+                errors.append(DEPTH_HOLE_PENALTY)
+                continue
+            seen = depth[py, px]
+            if seen <= 0:
+                errors.append(DEPTH_HOLE_PENALTY)
+                continue
+            errors.append(min(abs(seen - true_depth), DEPTH_HOLE_PENALTY))
+        return float(np.mean(errors))
+
+    def test_calibrate_camera(self, verbose=True):
+        global BEST_POS
+        candidates = CANDIDATE_POSITIONS if len(CANDIDATE_POSITIONS) > 0 else default_candidates()
+        scores = []
+        for pos in candidates:
+            self.move_camera(pos)
+            _, depth = self._render_image(testing=False, move=False)
+            scores.append(self._cloth_depth_error(depth[:, :, 0]))
+        best_index = int(np.argmin(scores))
+        BEST_POS = tuple(candidates[best_index])
+        self.move_camera(BEST_POS if TESTING_MODE else CAMERA_POS)
+        if verbose:
+            print(f"camera sweep: {len(candidates)} candidates, best error {scores[best_index]:.4f} m")
+            print(f"BEST_POS = {BEST_POS}   (current CAMERA_POS = {CAMERA_POS})")
+        return BEST_POS, scores
+
     def _sensor_depth(self, raw, pixel_angle):
         depth = raw.astype(np.float32)
         scale = depth * depth
@@ -231,9 +294,18 @@ class ClothFoldEnv(gym.Env):
         depth[invalid] = 0.0
         return depth
 
-    def _render_image(self):
+    def _render_image(self, testing=None, move=True):
         # image: each camera's (H,W,3) RGB concatenated along the channel axis
         # depth: each camera's (H,W) sensor depth stacked along the channel axis
+        # testing=True renders from BEST_POS (the sweep winner), else from CAMERA_POS;
+        # move=False keeps whatever pose the camera is in (used by the sweep itself)
+        if testing is None:
+            testing = TESTING_MODE
+        if move:
+            wanted = BEST_POS if testing else CAMERA_POS
+            cid = self.model.camera("main").id
+            if not np.allclose(self.model.cam_pos[cid], wanted):
+                self.move_camera(wanted)
         if self._renderer is None:
             H, W = self.image_size
             self._renderer = mujoco.Renderer(self.model, height=H, width=W)
@@ -594,12 +666,12 @@ def check_contract(env, n_episodes=4, n_steps=5):
             obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
     print("contract ok:", ref)
 
-def camera_xyaxes(pos, target):
-    # look-at
+def camera_axes(pos, target):
+    # look-at: returns (right, up) unit vectors for a camera at pos aimed at target
     forward = np.array(target, dtype=float) - np.array(pos, dtype=float)
     forward_norm = np.linalg.norm(forward)
     if forward_norm < 1e-9:
-        raise ValueError("CAMERA_POS and CAMERA_TARGET are the same point")
+        raise ValueError("camera position and target are the same point")
     forward = forward / forward_norm
     right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
     right_norm = np.linalg.norm(right)
@@ -608,7 +680,25 @@ def camera_xyaxes(pos, target):
     else:
         right = right / right_norm
     up = np.cross(right, forward)
+    return right, up
+
+def camera_xyaxes(pos, target):
+    right, up = camera_axes(pos, target)
     return f"{right[0]:.4f} {right[1]:.4f} {right[2]:.4f} {up[0]:.4f} {up[1]:.4f} {up[2]:.4f}"
+
+def default_candidates():
+    # spherical grid around CAMERA_TARGET: every radius x elevation x azimuth
+    target = np.array(CAMERA_TARGET, dtype=float)
+    candidates = []
+    for radius in CANDIDATE_RADII:
+        for elev_deg in CANDIDATE_ELEV_DEG:
+            elev = np.radians(elev_deg)
+            for k in range(CANDIDATE_N_AZIMUTH):
+                az = 2.0 * np.pi * k / CANDIDATE_N_AZIMUTH
+                offset = radius * np.array([np.cos(elev) * np.cos(az), np.cos(elev) * np.sin(az), np.sin(elev)])
+                pos = target + offset
+                candidates.append((round(float(pos[0]), 3), round(float(pos[1]), 3), round(float(pos[2]), 3)))
+    return candidates
 
 def build_cloth_xml(timestep):
     # flat cloth spawned already at rest on the table (no drop -> no bounce/jitter)

@@ -22,6 +22,7 @@ from cloth_fold_rl.fold_env import make_fold_env, make_expert, SUCCESS_DIST
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mujuco"))
+import sim_main  # noqa: E402
 from sim_main import make_render_fn  # noqa: E402
 
 def print_depth(base):
@@ -33,8 +34,11 @@ def print_depth(base):
         print("depth: no valid pixels")
         return
     center = d[d.shape[0] // 2, d.shape[1] // 2]
+    cloth_err = base._cloth_depth_error(d)
+    cam_pos = tuple(round(float(v), 3) for v in base.data.cam_xpos[base.model.camera("main").id])
     print(f"depth: valid {100 * valid.size / d.size:5.1f}%  min {valid.min():.3f}  "
-          f"max {valid.max():.3f}  mean {valid.mean():.3f}  center {center:.3f} m")
+          f"max {valid.max():.3f}  mean {valid.mean():.3f}  center {center:.3f} m  "
+          f"cloth err {cloth_err:.4f} m  cam {cam_pos}")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -68,6 +72,9 @@ def main():
     obs, info = env.reset(seed=0)
     if expert:
         expert.reset()
+    if sim_main.TESTING_MODE:
+        # sweep candidate camera positions once and print the winner so CAMERA_POS can be updated by hand
+        base.test_calibrate_camera()
 
     state = {"obs": obs, "substep": 0, "ep": 0, "last": dict(info),
              "reward": 0.0, "result": "running"}
@@ -85,7 +92,7 @@ def main():
             obs, r, term, trunc, info = env.step(action)
             state.update(obs=obs, last=dict(info))
             state["reward"] += r
-            print_depth(base)
+            print_depth(base) # prints out the depth data for u to compare and contrast with the actual world depth
             if term or trunc:
                 state["result"] = (
                     "SUCCESS" if info["success"]
