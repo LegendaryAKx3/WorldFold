@@ -15,8 +15,23 @@ CLOTH_HALF            = (CLOTH_COUNT-1) * CLOTH_SPACING / 2   # cloth spans +-0.
 
 # SO101 arm model
 ARM_XML_PATH          = os.path.join(os.path.dirname(so101_nexus.__file__), "assets", "SO101", "so101_new_calib.xml")
-ARM_BASE_LEFT         = (-0.30,  CLOTH_HALF, TABLE_TOP_Z) 
-ARM_BASE_RIGHT        = ( 0.30, -CLOTH_HALF, TABLE_TOP_Z)  
+# Side-by-side south of the cloth, both facing +y (north, into the cloth),
+# instead of the old diagonal-corner placement. Bases are 0.44m apart in x
+# (0.22m either side of center), sit 0.15m south of the cloth's south edge, and
+# are raised 0.06m above the table top. The extra south set-back and the raised
+# mount matter: with bases at table height right at the edge, reaching the near
+# south corners (the stage-1 grasp points, only ~9cm away) drove the wrist down
+# into the table and jammed the arm; from further back and higher the arm comes
+# down onto every corner from above. All four fold corners plus the stage-1
+# centre goals stay in reach from here (see cloth_fold_rl/README.md's
+# reachability table, re-measured via the same 40k-sample FK sweep method).
+ARM_BASE_LEFT         = (-0.22, -(CLOTH_HALF + 0.15), TABLE_TOP_Z + 0.06)
+ARM_BASE_RIGHT        = ( 0.22, -(CLOTH_HALF + 0.15), TABLE_TOP_Z + 0.06)
+# both arms rotated 90 deg about z from their zero pose, so "local +x" (the
+# old left arm's stock forward direction) points world +y, i.e. north into
+# the cloth from the south edge. Both bases use this SAME quat now -- there is
+# no more "left faces one way, right faces the opposite way" split.
+ARM_BASE_QUAT         = [0.70710678, 0.0, 0.0, 0.70710678]
 ARM_JOINTS            = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 GRIPPER_CLOSED        = -0.1
 ARM_TIMESTEP         = 0.0005     # contact-heavy grasp needs 0.5ms; 1ms explodes on contact
@@ -143,6 +158,13 @@ class ClothFoldEnv(gym.Env):
             gripper_actuator = self.model.actuator(f"{prefix}gripper")
             self._gripper_act[prefix] = gripper_actuator.id
         self._weld_id = {p: ids[0] for p, ids in self._weld_ids.items()}   # primary weld, for the viewer
+        # optional per-prefix allow-list of cloth vertex indices eligible to weld
+        # right now. None (the default) means every vertex in grasp_corners is
+        # eligible -- unchanged behaviour. A multi-stage wrapper can narrow it per
+        # stage so an arm only grabs the corner it is meant to carry (see
+        # quarter_fold_env, where CLOTH_10 is in both arms' grasp_corners and would
+        # otherwise be hijacked by the wrong arm mid-task).
+        self.weld_mask = {p: None for p in self.prefixes}
 
         # cloth vertices are bodies cloth_0 .. cloth_(N*N-1) (row-major grid)
         n_vert = CLOTH_COUNT * CLOTH_COUNT
@@ -425,8 +447,11 @@ class ClothFoldEnv(gym.Env):
         if self._gripper_closed[prefix]:
             self.data.ctrl[act_id] = GRIPPER_CLOSED
             site = self.data.site_xpos[self._site_id[prefix]]
-            for eqid, corner_body in zip(self._weld_ids[prefix], self._corner_body[prefix]):
+            allowed = self.weld_mask.get(prefix)
+            for vtx, eqid, corner_body in zip(self.grasp_corners[prefix], self._weld_ids[prefix], self._corner_body[prefix]):
                 if self.data.eq_active[eqid] != 0:
+                    continue
+                if allowed is not None and vtx not in allowed:
                     continue
                 gap = float(np.linalg.norm(site - self.data.xpos[corner_body]))
                 if gap < self.grasp_radius:
@@ -611,14 +636,16 @@ def compile_model(timestep, grasp_corners=GRASP_CORNERS, spec_hook=None):
     # proof of concept) can add geometry without forking this file. None = stock model.
     spec = mujoco.MjSpec.from_string(build_cloth_xml(timestep))
 
-    # attach two independent copies of the SO101 arm, each with its own name prefix
+    # attach two independent copies of the SO101 arm, each with its own name prefix.
+    # both sit on the south edge, both rotated the same way (ARM_BASE_QUAT) -- no
+    # more mirrored 180deg-about-z split, since neither arm needs to face "away"
+    # from the other anymore.
     left_spec = mujoco.MjSpec.from_file(ARM_XML_PATH)
-    lf = spec.worldbody.add_frame(pos=ARM_BASE_LEFT)
+    lf = spec.worldbody.add_frame(pos=ARM_BASE_LEFT, quat=ARM_BASE_QUAT)
     lf.attach_body(left_spec.body("base"), "left_", "")
 
     right_spec = mujoco.MjSpec.from_file(ARM_XML_PATH)
-    rf = spec.worldbody.add_frame(pos=ARM_BASE_RIGHT)
-    rf.quat = [0.0, 0.0, 0.0, 1.0]   # 180 deg about z, so this arm faces -x toward the cloth
+    rf = spec.worldbody.add_frame(pos=ARM_BASE_RIGHT, quat=ARM_BASE_QUAT)
     rf.attach_body(right_spec.body("base"), "right_", "")
 
     # SIM-ONLY GRASP CHEAT: a real gripper can't reliably pinch flat cloth, so we fake
@@ -627,9 +654,13 @@ def compile_model(timestep, grasp_corners=GRASP_CORNERS, spec_hook=None):
     # and flips data.eq_active). WELD is used over CONNECT because its relative pose is
     # settable at runtime -- CONNECT bakes its anchor at compile (home pose), which would
     # hold the cloth ~9cm from the claw. the cloth grid is row-major (index = ix*COUNT+iy);
-    # by default each gripper gets one weld, to its diagonal corner: left cloth_10 at
-    # (-h, +h), right cloth_110 at (+h, -h). grasp_corners can list several vertices
-    # per gripper, one weld each, so a gripper can pick up stacked corners.
+    # by default each gripper gets one weld: left cloth_10 at (-h, +h), right
+    # cloth_110 at (+h, -h). both arms now sit side-by-side on the south (-y)
+    # table edge (same y, offset in x) rather than diagonal corners, so these are
+    # simply the two default single-grasp vertices -- both remain reachable from
+    # the new base positions (see cloth_fold_rl/README.md's reachability table).
+    # grasp_corners can list several vertices per gripper, one weld each, so a
+    # gripper can pick up stacked corners.
     for prefix, vertices in grasp_corners.items():
       for vertex in vertices:
         eq = spec.add_equality()
@@ -731,6 +762,8 @@ def make_render_fn(model, data):
         np.array(side_faces, dtype=faces.dtype).reshape(-1, 3),  # side walls
     ])
 
+    last_vertices = {"v": None}
+
     def render_fn(scene):
         # mjviser auto-tracks the first movable body -- which here is a cloth corner
         # vertex, so the camera chases that wobbling corner and the whole scene
@@ -738,6 +771,13 @@ def make_render_fn(model, data):
         scene.camera_tracking_enabled = False
         scene.update_from_mjdata(data)
         vertices = np.array(data.flexvert_xpos)
+        # step_fn only advances physics once every n_substeps calls (see run_*.py's
+        # step_fn), so most render_fn calls see an UNCHANGED cloth. add_mesh_simple
+        # re-sends the whole mesh over the websocket every time it's called; skip the
+        # resend when nothing moved instead of paying that cost for a no-op frame.
+        if last_vertices["v"] is not None and np.array_equal(vertices, last_vertices["v"]):
+            return
+        last_vertices["v"] = vertices.copy()
         # visual slab, decoupled from the physics radius: a vertex center rests
         # ~CLOTH_RADIUS above the table, so drop to the cloth's actual bottom surface
         # (center - radius, ~table level) and build a thin VISUAL_THICKNESS slab up

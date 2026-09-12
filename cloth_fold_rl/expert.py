@@ -90,12 +90,17 @@ class FoldExpert:
     OPEN_PHASES = ("approach", "release", "retreat", "done")
     RETREAT_HEIGHT = 0.05
 
-    def __init__(self, env, seed=0, prefix="left_", corner=MOVING_CORNER, goal=None, release=False):
+    def __init__(self, env, seed=0, prefix="left_", corner=MOVING_CORNER, goal=None, release=False,
+                 raw_vertex=False):
         self.env = env
         self.base = env.unwrapped
         self.rng = np.random.default_rng(seed)
         self.prefix = prefix
         self.corners = tuple(np.atleast_1d(corner))
+        # corner indexes into _corner_ids (the 4 true corners) by default; set
+        # raw_vertex=True to index into _cloth_body_ids instead, for tasks that
+        # grasp a non-corner vertex (e.g. an edge midpoint).
+        self._corner_lookup = self.base._cloth_body_ids if raw_vertex else self.base._corner_ids
         self.goal = goal if goal is not None else (lambda: self.env._goal)
         if release:
             self.PHASES = self.PHASES + self.RELEASE_PHASES
@@ -121,7 +126,7 @@ class FoldExpert:
         return q, err
 
     def _corner(self):
-        return np.mean([self.base.data.xpos[self.base._corner_ids[c]] for c in self.corners], axis=0)
+        return np.mean([self.base.data.xpos[self._corner_lookup[c]] for c in self.corners], axis=0)
 
     def _plan(self):
         corner = self._corner()
