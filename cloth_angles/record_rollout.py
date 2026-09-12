@@ -54,7 +54,7 @@ def main():
     env.reset(seed=args.seed)
     perturb_steps = int(rng.integers(1, max(2, args.max_steps // 3)))
 
-    frames = [env._render_image()]
+    frames = [env._render_image()[0]]
     fold_score_final = 0.0
     success = False
 
@@ -67,7 +67,7 @@ def main():
             action = recovery_action(env, rng, t, perturb_steps)
 
         obs, reward, terminated, truncated, info = env.step(action)
-        frames.append(env._render_image())
+        frames.append(env._render_image()[0])
         fold_score_final = info["fold_score"]
         success = info["success"]
         if terminated or truncated:
