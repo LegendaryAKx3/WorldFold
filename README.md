@@ -9,8 +9,7 @@ WatAI, Spring/Fall 2026
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-molmoact.txt   # optional, for MolmoAct2
+pip install -r cloth_fold_rl/requirements.txt
 ```
 
 Windows: see [mujuco/other/setup.md](mujuco/other/setup.md).
@@ -18,19 +17,27 @@ Windows: see [mujuco/other/setup.md](mujuco/other/setup.md).
 ## Usage
 
 ```bash
-python mujuco/sim_main.py                                  # scripted fold demo in the viewer
-python mujuco/prove_grabber.py                             # physical grabber PoC (no weld cheat)
+# watch the trained fold policy (100% success), viewer at http://localhost:8080
+python -m cloth_fold_rl.run_trained --checkpoint outputs/cloth_fold_rl/run2/best.zip
+python -m cloth_fold_rl.run_trained --policy expert          # scripted expert instead
+
+# retrain from scratch: expert demos -> behavior cloning -> PPO fine-tune
+python -m cloth_fold_rl.prove_feasible --episodes 3
+python -m cloth_fold_rl.collect_demos --episodes 200 --workers 8
+python -m cloth_fold_rl.bc --epochs 30
+python -m cloth_fold_rl.train --init-from outputs/cloth_fold_rl/bc.zip --rounds 8
+python -m cloth_fold_rl.record_video --checkpoint outputs/cloth_fold_rl/run2/best.zip
+
+# world model
 python -m cloth_angles.collect_episodes --config cloth_angles/config.yaml
 python -m cloth_angles.train --config cloth_angles/config.yaml
-python scripts/train_ppo.py --env MuJoCoTouch-v1 --timesteps 100000
-python scripts/run_policy.py --env MuJoCoTouch-v1 --policy ppo \
-    --checkpoint outputs/ppo/MuJoCoTouch-v1/model.zip --episodes 5
 ```
 
 ## Layout
 
 ```
 mujuco/sim_main.py   ClothFoldEnv: tasks fold/drop/push/drag, state/pixels/hybrid obs, 14-dim action
+cloth_fold_rl/       single-corner fold task: env wrapper, scripted expert, BC, PPO, committed checkpoints
 mujuco/simulations/  earlier prototypes and smoke test
 cloth_angles/        RSSM world model over cloth angle fields: collect, train, evaluate
 policy_runner/       policy interface and registry (random, ppo)
@@ -41,16 +48,6 @@ outputs/videos/      recorded rollouts
 
 ## Docs
 
-World-model training consumes each `action_t` before reconstructing `next_obs_t`.
-Evaluation reports prior-only next-state prediction MAE separately from posterior
-reconstruction MAE. Retrain world-model checkpoints produced before this timing
-fix: their decoder was trained against a target one timestep ahead of its latent.
-Existing PPO checkpoints are unaffected.
-
-Run the cloth-angle tests with `python -m pytest cloth_angles/tests` (install
-`pytest` in the development environment first).
-
-- [PPO baseline](docs/ppo_training.md)
+- [Fold task: why the wrapper, results, physical grasp](cloth_fold_rl/README.md)
 - [World model: benchmarks, analytic reward, imagination](docs/world_model.md)
-- [MolmoAct2 import](docs/molmoact_import.md)
 - [Adding a policy](policy_runner/NOTES.md)
